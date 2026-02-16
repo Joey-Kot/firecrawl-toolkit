@@ -1,0 +1,27 @@
+[project]
+name = "firecrawl-toolkit"
+version = "0.0.13"
+description = "A high-performance, asynchronous MCP server for Firecrawl Search, featuring connection pooling, request retries, and intelligent input parsing."
+readme = "README.md"
+requires-python = ">=3.12"
+keywords = ["firecrawl", "mcp", "server", "google", "search"]
+authors = [
+    { name="Joey.Kot", email="joey.kot.x@gmail.com" },
+]
+
+dependencies = [
+    "httpx>=0.28.1",
+    "h2>=4.2.0",
+    "dotenv>=0.9.9",
+    "fastmcp>=2.14.4"
+]
+
+[project.scripts]
+firecrawl-toolkit = "firecrawl_toolkit.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+firecrawl_toolkit = ["data/*.json"]
