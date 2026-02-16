@@ -4,6 +4,10 @@ A high-performance, asynchronous MCP server that provides comprehensive Google s
 
 This project is built on `httpx`, utilizing asynchronous clients and connection pool management to offer LLMs a stable and efficient external information retrieval tool.
 
+## PyPI Package
+
+firecrawl-toolkit: https://pypi.org/project/firecrawl-toolkit/
+
 ## Key Features
 
 - **Asynchronous Architecture**: Fully based on `asyncio` and `httpx`, ensuring high throughput and non-blocking I/O operations.
@@ -178,4 +182,5 @@ Example response:
 ## License Agreement
 
 This project is licensed under the MIT License.
+
 
