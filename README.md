@@ -26,7 +26,10 @@ This service provides the following tools:
 
 | Tool Name                | Description                                  |
 | ------------------------ | -------------------------------------------- |
-| `firecrawl-search`  | Performs general Google web / news / images searches.        |
+| `firecrawl-aggregated-search`  | Aggregated Search Interface, Combining Webpage, News, And Image Search Results.          |
+| `firecrawl-web-search`          | Web Search Interface. |
+| `firecrawl-news-search`          | News Search Interface. |
+| `firecrawl-image-search`          | Image Search Interface. |
 | `firecrawl-scrape`          | Scrapes and returns the content of a specified URL. |
 
 ## Installation Guide
@@ -182,5 +185,6 @@ Example response:
 ## License Agreement
 
 This project is licensed under the MIT License.
+
 
 
