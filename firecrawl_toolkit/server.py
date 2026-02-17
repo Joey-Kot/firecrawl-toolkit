@@ -507,7 +507,7 @@ async def execute_firecrawl_request(
             return {"error": True, "message": f"{api_name}接口未知错误: {e}"}
 
 
-@mcp.tool(name="firecrawl-search")
+@mcp.tool(name="firecrawl-aggregated-search")
 async def firecrawl_search(
     query: str,
     country: Optional[str] = None,
@@ -515,14 +515,14 @@ async def firecrawl_search(
     search_time: Optional[str] = None,
 ) -> str:
     """
-    通用搜索接口。
-    参数:
-        query: 搜索关键词（必填）
-        country: 国家名称（可选），支持中文或英文国家名
-        search_num: 返回结果数量，1~100，默认20
-        search_time: 时间过滤，如“小时”，“天”，“周”，“月”，“年”，可选
-    返回:
-        JSON格式字符串，包含查询参数和搜索结果。
+    Aggregated Search Interface, Combining Webpage, News, And Image Search Results.
+    Parameters:
+        query: Search Keywords (Required)
+        search_num: Number Of Results To Return, 1~100, Default 20 (Required)
+        country: Country Name (Optional)
+        search_time: Time Filter, Such As "hour", "day", "week", "month", "year" (Optional)
+    Returns:
+        Json Format String
     """
     api_name_key = "search"
     api_url = API_ENDPOINTS.get(api_name_key)
@@ -538,6 +538,261 @@ async def firecrawl_search(
         "query": query,
         "limit": validate_search_num(search_num),
         "sources": [{"type": "web"}, {"type": "news"}, {"type": "images"}],
+        # tbs 可选：根据传入的 search_time 映射
+        "country": country_code,
+        "timeout": 60000,
+        "ignoreInvalidURLs": False,
+        "scrapeOptions": {
+            "formats": [],
+            "onlyMainContent": True,
+            "maxAge": 172800000,
+            "waitFor": 0,
+            "mobile": False,
+            "skipTlsVerification": False,
+            "timeout": 30000,
+            "parsers": [],
+            "location": {
+                "country": country_code
+            },
+            "removeBase64Images": True,
+            "blockAds": True,
+            "proxy": "auto",
+            "storeInCache": True
+        }
+    }
+
+    tbs_val = map_search_time_to_tbs_param(search_time)
+    if tbs_val:
+        payload["tbs"] = tbs_val
+
+    # 调用通用请求执行器发送请求并返回结果
+    result = await execute_firecrawl_request(api_url, payload, api_name_key)
+    if result is None:
+        return compact_error_response(f"{api_name_key}请求失败，接口响应为空。")
+    if isinstance(result, dict) and result.get("error"):
+        return to_compact_json({
+            "success": False,
+            "query_details": payload,
+            "error": result.get("error"),
+            "message": result.get("message", "未知错误"),
+            "status_code": result.get("status_code", None),
+        })
+    if not isinstance(result, dict):
+        return compact_error_response(f"{api_name_key}请求失败，接口响应格式异常。")
+    if result.get("success") is False:
+        return compact_error_response(
+            f"{api_name_key}请求失败，上游返回 success=false。",
+            extra={"upstream": result}
+        )
+    if not isinstance(result.get("data"), dict):
+        return compact_error_response(
+            f"{api_name_key}请求失败，上游返回缺少 data 对象。",
+            extra={"upstream": result}
+        )
+    return to_compact_json(transform_search_result(result))
+
+
+@mcp.tool(name="firecrawl-web-search")
+async def firecrawl_search(
+    query: str,
+    country: Optional[str] = None,
+    search_num: int = 20,
+    search_time: Optional[str] = None,
+) -> str:
+    """
+    Web Search Interface
+    Parameters:
+        query: Search Keywords (Required)
+        search_num: Number Of Results To Return, 1~100, Default 20 (Required)
+        country: Country Name (Optional)
+        search_time: Time Filter, Such As "hour", "day", "week", "month", "year" (Optional)
+    Returns:
+        Json Format String
+    """
+    api_name_key = "search"
+    api_url = API_ENDPOINTS.get(api_name_key)
+    if not api_url:
+        return compact_error_response(f"未知API_KEY '{api_name_key}'，无法处理请求。")
+
+    # 解析并规范化国家代码为 ISO2 大写
+    country_code = get_country_code_alpha2(country)
+    logger.info("search country param '%s' -> resolved country_code: %s", country, country_code)
+
+    # 构建固定的 payload
+    payload: Dict[str, Any] = {
+        "query": query,
+        "limit": validate_search_num(search_num),
+        "sources": [{"type": "web"}],
+        # tbs 可选：根据传入的 search_time 映射
+        "country": country_code,
+        "timeout": 60000,
+        "ignoreInvalidURLs": False,
+        "scrapeOptions": {
+            "formats": [],
+            "onlyMainContent": True,
+            "maxAge": 172800000,
+            "waitFor": 0,
+            "mobile": False,
+            "skipTlsVerification": False,
+            "timeout": 30000,
+            "parsers": [],
+            "location": {
+                "country": country_code
+            },
+            "removeBase64Images": True,
+            "blockAds": True,
+            "proxy": "auto",
+            "storeInCache": True
+        }
+    }
+
+    tbs_val = map_search_time_to_tbs_param(search_time)
+    if tbs_val:
+        payload["tbs"] = tbs_val
+
+    # 调用通用请求执行器发送请求并返回结果
+    result = await execute_firecrawl_request(api_url, payload, api_name_key)
+    if result is None:
+        return compact_error_response(f"{api_name_key}请求失败，接口响应为空。")
+    if isinstance(result, dict) and result.get("error"):
+        return to_compact_json({
+            "success": False,
+            "query_details": payload,
+            "error": result.get("error"),
+            "message": result.get("message", "未知错误"),
+            "status_code": result.get("status_code", None),
+        })
+    if not isinstance(result, dict):
+        return compact_error_response(f"{api_name_key}请求失败，接口响应格式异常。")
+    if result.get("success") is False:
+        return compact_error_response(
+            f"{api_name_key}请求失败，上游返回 success=false。",
+            extra={"upstream": result}
+        )
+    if not isinstance(result.get("data"), dict):
+        return compact_error_response(
+            f"{api_name_key}请求失败，上游返回缺少 data 对象。",
+            extra={"upstream": result}
+        )
+    return to_compact_json(transform_search_result(result))
+
+
+@mcp.tool(name="firecrawl-news-search")
+async def firecrawl_search(
+    query: str,
+    country: Optional[str] = None,
+    search_num: int = 20,
+    search_time: Optional[str] = None,
+) -> str:
+    """
+    News Search Interface
+    Parameters:
+        query: Search Keywords (Required)
+        search_num: Number Of Results To Return, 1~100, Default 20 (Required)
+        country: Country Name (Optional)
+        search_time: Time Filter, Such As "hour", "day", "week", "month", "year" (Optional)
+    Returns:
+        Json Format String
+    """
+    api_name_key = "search"
+    api_url = API_ENDPOINTS.get(api_name_key)
+    if not api_url:
+        return compact_error_response(f"未知API_KEY '{api_name_key}'，无法处理请求。")
+
+    # 解析并规范化国家代码为 ISO2 大写
+    country_code = get_country_code_alpha2(country)
+    logger.info("search country param '%s' -> resolved country_code: %s", country, country_code)
+
+    # 构建固定的 payload
+    payload: Dict[str, Any] = {
+        "query": query,
+        "limit": validate_search_num(search_num),
+        "sources": [{"type": "news"}],
+        # tbs 可选：根据传入的 search_time 映射
+        "country": country_code,
+        "timeout": 60000,
+        "ignoreInvalidURLs": False,
+        "scrapeOptions": {
+            "formats": [],
+            "onlyMainContent": True,
+            "maxAge": 172800000,
+            "waitFor": 0,
+            "mobile": False,
+            "skipTlsVerification": False,
+            "timeout": 30000,
+            "parsers": [],
+            "location": {
+                "country": country_code
+            },
+            "removeBase64Images": True,
+            "blockAds": True,
+            "proxy": "auto",
+            "storeInCache": True
+        }
+    }
+
+    tbs_val = map_search_time_to_tbs_param(search_time)
+    if tbs_val:
+        payload["tbs"] = tbs_val
+
+    # 调用通用请求执行器发送请求并返回结果
+    result = await execute_firecrawl_request(api_url, payload, api_name_key)
+    if result is None:
+        return compact_error_response(f"{api_name_key}请求失败，接口响应为空。")
+    if isinstance(result, dict) and result.get("error"):
+        return to_compact_json({
+            "success": False,
+            "query_details": payload,
+            "error": result.get("error"),
+            "message": result.get("message", "未知错误"),
+            "status_code": result.get("status_code", None),
+        })
+    if not isinstance(result, dict):
+        return compact_error_response(f"{api_name_key}请求失败，接口响应格式异常。")
+    if result.get("success") is False:
+        return compact_error_response(
+            f"{api_name_key}请求失败，上游返回 success=false。",
+            extra={"upstream": result}
+        )
+    if not isinstance(result.get("data"), dict):
+        return compact_error_response(
+            f"{api_name_key}请求失败，上游返回缺少 data 对象。",
+            extra={"upstream": result}
+        )
+    return to_compact_json(transform_search_result(result))
+
+
+@mcp.tool(name="firecrawl-image-search")
+async def firecrawl_search(
+    query: str,
+    country: Optional[str] = None,
+    search_num: int = 20,
+    search_time: Optional[str] = None,
+) -> str:
+    """
+    Image Search Interface
+    Parameters:
+        query: Search Keywords (Required)
+        search_num: Number Of Results To Return, 1~100, Default 20 (Required)
+        country: Country Name (Optional)
+        search_time: Time Filter, Such As "hour", "day", "week", "month", "year" (Optional)
+    Returns:
+        Json Format String
+    """
+    api_name_key = "search"
+    api_url = API_ENDPOINTS.get(api_name_key)
+    if not api_url:
+        return compact_error_response(f"未知API_KEY '{api_name_key}'，无法处理请求。")
+
+    # 解析并规范化国家代码为 ISO2 大写
+    country_code = get_country_code_alpha2(country)
+    logger.info("search country param '%s' -> resolved country_code: %s", country, country_code)
+
+    # 构建固定的 payload
+    payload: Dict[str, Any] = {
+        "query": query,
+        "limit": validate_search_num(search_num),
+        "sources": [{"type": "images"}],
         # tbs 可选：根据传入的 search_time 映射
         "country": country_code,
         "timeout": 60000,
