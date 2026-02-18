@@ -1,6 +1,6 @@
 [project]
 name = "firecrawl-toolkit"
-version = "0.0.14"
+version = "0.0.15"
 description = "A high-performance, asynchronous MCP server for Firecrawl Search, featuring connection pooling, request retries, and intelligent input parsing."
 readme = "README.md"
 requires-python = ">=3.12"
