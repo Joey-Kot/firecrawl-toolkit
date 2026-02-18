@@ -1,6 +1,8 @@
 name: Publish to PyPI
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirm:
@@ -22,6 +24,7 @@ jobs:
 
     steps:
       - name: Confirm release intent
+        if: github.event_name == 'workflow_dispatch'
         env:
           CONFIRM: ${{ github.event.inputs.confirm }}
         run: |
