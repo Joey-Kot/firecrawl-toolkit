@@ -217,6 +217,103 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["success"], False)
         self.assertTrue(parsed["error"])
 
+    async def test_scrape_exclude_tags_normalize_merge_and_escape_safe(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                excludeTags=[
+                    "  ",
+                    None,
+                    123,
+                    "[class^=\\\"skip\\\"]",
+                    "[id*=\\\"disqus\\\"]",
+                    "[id*=\\\"disqus\\\"]",
+                ],
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(len(calls), 1)
+        sent_exclude_tags = calls[0]["excludeTags"]
+        self.assertIn("script", sent_exclude_tags)
+        self.assertIn("[class^=\\\"skip\\\"]", sent_exclude_tags)
+        self.assertEqual(sent_exclude_tags.count("[id*=\\\"disqus\\\"]"), 1)
+
+    async def test_scrape_empty_markdown_triggers_fallback_without_tag_keys(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"success": True, "data": {"markdown": "", "metadata": {}}}
+            return {"success": True, "data": {"markdown": "fallback", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(url="https://example.com")
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(parsed["markdown"], "fallback")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("includeTags", calls[0])
+        self.assertIn("excludeTags", calls[0])
+        self.assertNotIn("includeTags", calls[1])
+        self.assertNotIn("excludeTags", calls[1])
+
+    async def test_scrape_none_markdown_does_not_trigger_fallback(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": None, "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(url="https://example.com")
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertIsNone(parsed["markdown"])
+        self.assertEqual(len(calls), 1)
+
+    async def test_scrape_fallback_failure_keeps_first_result(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"success": True, "data": {"markdown": "", "metadata": {}}}
+            return {"error": True, "message": "fallback failed"}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(url="https://example.com")
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(parsed["markdown"], "")
+        self.assertEqual(len(calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -128,6 +128,74 @@ API_ENDPOINTS = {
 
 }
 HTTP_TIMEOUT = 30.0
+DEFAULT_SCRAPE_EXCLUDE_TAGS: List[str] = [
+    "script",
+    "style",
+    "noscript",
+    "form",
+    "input",
+    "button",
+    "select",
+    "textarea",
+    "nav",
+    ".nav",
+    ".navbar",
+    ".navigation",
+    ".menu",
+    ".menubar",
+    "header",
+    "footer",
+    "aside",
+    "#comments",
+    "#disqus_thread",
+    "[class*=\"logo\"]",
+    "[class*=\"brand\"]",
+    "[id*=\"logo\"]",
+    "img[alt*=\"logo\"]",
+    "img[src*=\"logo\"]",
+    "[id*=\"brand\"]",
+    "[class^=\"category--\"]",
+    "[id^=\"category--\"]",
+    "[class$=\"--category\"]",
+    "[id$=\"--category\"]",
+    "[class*=\"comment\"]",
+    "[id*=\"comment\"]",
+    "[class*=\"disqus\"]",
+    "[id*=\"disqus\"]",
+    "[class^=\"skip\"]",
+    "[class*=\"accessib\"]",
+    ".sr-only",
+    ".visually-hidden",
+    "[class*=\"-ad-\"]",
+    "[class*=\"_ad_\"]",
+    "[class$=\"-ad\"]",
+    "[class$=\"_ad\"]",
+    "[class^=\"ad-\"]",
+    "[class^=\"ad_\"]",
+    "[class*=\"advert\"]",
+    ".sidebar",
+    "#sidebar",
+    "[class*=\"sidebar\"]",
+    "[class*=\"sider\"]",
+    "[class^=\"menu-\"]",
+    "[class^=\"menu_\"]",
+    "[class$=\"_module\"]",
+    "[class$=\"-module\"]",
+    "[class*=\"breadcrumb\"]",
+    "[class*=\"pagination\"]",
+    "[class*=\"relate\"]",
+    "[class*=\"recommend\"]",
+    "[class*=\"trending\"]",
+    "[class^=\"header-\"]",
+    "[class$=\"-header\"]",
+    "[class^=\"header_\"]",
+    "[class$=\"_header\"]",
+    "[class*=\"footer\"]",
+    "[class$=\"-offset\"]",
+    "[class*=\"-offset-\"]",
+    "[class$=\"_offset\"]",
+    "[class*=\"_offset_\"]",
+]
 
 # 并发与重试相关配置（可通过环境变量调整）
 FIRECRAWL_MAX_CONNECTIONS = int(os.getenv("FIRECRAWL_MAX_CONNECTIONS", "200"))
@@ -313,6 +381,31 @@ def transform_scrape_result(raw: Dict[str, Any]) -> Dict[str, Any]:
         "markdown": decoded_markdown,
         "creditsUsed": pick(raw, ["data", "metadata", "creditsUsed"], None),
     }
+
+
+def _stable_unique_strings(values: List[str]) -> List[str]:
+    seen = set()
+    result: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _normalize_exclude_tags(user_tags: Optional[List[Any]]) -> List[str]:
+    if not isinstance(user_tags, list):
+        return []
+    normalized: List[str] = []
+    for tag in user_tags:
+        if not isinstance(tag, str):
+            continue
+        cleaned = tag.strip()
+        if not cleaned:
+            continue
+        normalized.append(cleaned)
+    return _stable_unique_strings(normalized)
 
 
 def get_country_code_alpha2(country_name: Optional[str]) -> str:
@@ -850,11 +943,13 @@ async def firecrawl_search(
 @mcp.tool(name="firecrawl-scrape")
 async def firecrawl_scrape(
     url: str,
+    excludeTags: Optional[List[str]] = None,
 ) -> str:
     """
     网页内容抓取接口。
     参数:
         url: 目标网页URL（必填）
+        excludeTags: 追加的排除选择器（可选）
     返回:
         JSON字符串
     """
@@ -866,79 +961,13 @@ async def firecrawl_scrape(
     if not url or not isinstance(url, str) or not url.strip():
         return compact_error_response("参数 url 必填且不能为空字符串。")
 
+    normalized_user_exclude_tags = _normalize_exclude_tags(excludeTags)
     payload: Dict[str, Any] = {
         "url": url,
         "formats": ["markdown"],
         "onlyMainContent": True,
         "includeTags": [],
-        "excludeTags": [
-            "script",
-            "style",
-            "noscript",
-            "form",
-            "input",
-            "button",
-            "select",
-            "textarea",
-            "nav",
-            ".nav",
-            ".navbar",
-            ".navigation",
-            ".menu",
-            ".menubar",
-            "header",
-            "footer",
-            "aside",
-            "#comments",
-            "#disqus_thread",
-            "[class*=\"logo\"]",
-            "[class*=\"brand\"]",
-            "[id*=\"logo\"]",
-            "img[alt*=\"logo\"]",
-            "img[src*=\"logo\"]",
-            "[id*=\"brand\"]",
-            "[class^=\"category--\"]",
-            "[id^=\"category--\"]",
-            "[class$=\"--category\"]",
-            "[id$=\"--category\"]",
-            "[class*=\"comment\"]",
-            "[id*=\"comment\"]",
-            "[class*=\"disqus\"]",
-            "[id*=\"disqus\"]",
-            "[class^=\"skip\"]",
-            "[class*=\"accessib\"]",
-            ".sr-only",
-            ".visually-hidden",
-            "[class*=\"-ad-\"]",
-            "[class*=\"_ad_\"]",
-            "[class$=\"-ad\"]",
-            "[class$=\"_ad\"]",
-            "[class^=\"ad-\"]",
-            "[class^=\"ad_\"]",
-            "[class*=\"advert\"]",
-            ".sidebar",
-            "#sidebar",
-            "[class*=\"sidebar\"]",
-            "[class*=\"sider\"]",
-            "[class^=\"menu-\"]",
-            "[class^=\"menu_\"]",
-            "[class$=\"_module\"]",
-            "[class$=\"-module\"]",
-            "[class*=\"breadcrumb\"]",
-            "[class*=\"pagination\"]",
-            "[class*=\"relate\"]",
-            "[class*=\"recommend\"]",
-            "[class*=\"trending\"]",
-            "[class^=\"header-\"]",
-            "[class$=\"-header\"]",
-            "[class^=\"header_\"]",
-            "[class$=\"_header\"]",
-            "[class*=\"footer\"]",
-            "[class$=\"-offset\"]",
-            "[class*=\"-offset-\"]",
-            "[class$=\"_offset\"]",
-            "[class*=\"_offset_\"]"
-        ],
+        "excludeTags": _stable_unique_strings(DEFAULT_SCRAPE_EXCLUDE_TAGS + normalized_user_exclude_tags),
         "maxAge": 172800000,
         "headers": {},
         "waitFor": 0,
@@ -953,6 +982,27 @@ async def firecrawl_scrape(
     }
 
     result = await execute_firecrawl_request(api_url, payload, api_name_key)
+    if (
+        isinstance(result, dict)
+        and result.get("success") is not False
+        and isinstance(result.get("data"), dict)
+        and result["data"].get("markdown") == ""
+    ):
+        logger.info("scrape首次返回 markdown 为空，移除 includeTags/excludeTags 后重试一次。")
+        fallback_payload = dict(payload)
+        fallback_payload.pop("includeTags", None)
+        fallback_payload.pop("excludeTags", None)
+        fallback_result = await execute_firecrawl_request(api_url, fallback_payload, api_name_key)
+        if (
+            isinstance(fallback_result, dict)
+            and not fallback_result.get("error")
+            and fallback_result.get("success") is not False
+            and isinstance(fallback_result.get("data"), dict)
+        ):
+            result = fallback_result
+        else:
+            logger.warning("scrape兜底重试失败，回退使用首次请求结果。")
+
     if result is None:
         return compact_error_response(f"{api_name_key}请求失败，接口响应为空。")
     if isinstance(result, dict) and result.get("error"):

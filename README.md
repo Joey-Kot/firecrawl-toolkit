@@ -149,18 +149,21 @@ Example response:
 Parameters:
 
 - `url` (str, required): URL of the target webpage.
+- `excludeTags` (list[str], optional, default `[]`): Additional CSS selectors to exclude; merged with built-in noise-filter selectors after normalization and deduplication.
 
 Example:
 
 ```Python
 result_json = firecrawl_scrape(
-    url="https://www.example.com"
+    url="https://www.example.com",
+    excludeTags=["[class^=\"skip\"]", "[id*=\"disqus\"]"]
 )
 ```
 
 Built-in noise filtering:
 
 - The tool uses an internal `excludeTags` selector set to suppress noisy DOM regions and prioritize main content quality.
+- If the first scrape returns `data.markdown == ""`, the tool automatically retries once without `includeTags`/`excludeTags` as a fallback.
 
 Response (mapped):
 
