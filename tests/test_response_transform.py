@@ -293,6 +293,72 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(parsed["markdown"])
         self.assertEqual(len(calls), 1)
 
+    async def test_scrape_max_characters_truncates_markdown(self):
+        async def fake_execute(*_args, **_kwargs):
+            return {"success": True, "data": {"markdown": "hello world", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(url="https://example.com", maxCharacters=5)
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(parsed["markdown"], "hello")
+
+    async def test_scrape_max_characters_equal_or_greater_than_length(self):
+        async def fake_execute(*_args, **_kwargs):
+            return {"success": True, "data": {"markdown": "hello", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out_equal = await server.firecrawl_scrape(url="https://example.com", maxCharacters=5)
+            out_greater = await server.firecrawl_scrape(url="https://example.com", maxCharacters=10)
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed_equal = json.loads(out_equal)
+        parsed_greater = json.loads(out_greater)
+        self.assertEqual(parsed_equal["markdown"], "hello")
+        self.assertEqual(parsed_greater["markdown"], "hello")
+
+    async def test_scrape_max_characters_invalid_values_are_ignored(self):
+        async def fake_execute(*_args, **_kwargs):
+            return {"success": True, "data": {"markdown": "hello world", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out_zero = await server.firecrawl_scrape(url="https://example.com", maxCharacters=0)
+            out_negative = await server.firecrawl_scrape(url="https://example.com", maxCharacters=-1)
+            out_non_int = await server.firecrawl_scrape(url="https://example.com", maxCharacters="5")
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed_zero = json.loads(out_zero)
+        parsed_negative = json.loads(out_negative)
+        parsed_non_int = json.loads(out_non_int)
+        self.assertEqual(parsed_zero["markdown"], "hello world")
+        self.assertEqual(parsed_negative["markdown"], "hello world")
+        self.assertEqual(parsed_non_int["markdown"], "hello world")
+
+    async def test_scrape_max_characters_keeps_none_markdown(self):
+        async def fake_execute(*_args, **_kwargs):
+            return {"success": True, "data": {"markdown": None, "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(url="https://example.com", maxCharacters=5)
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertIsNone(parsed["markdown"])
+
     async def test_scrape_fallback_failure_keeps_first_result(self):
         calls = []
 
@@ -312,6 +378,27 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         parsed = json.loads(out)
         self.assertEqual(parsed["success"], True)
         self.assertEqual(parsed["markdown"], "")
+        self.assertEqual(len(calls), 2)
+
+    async def test_scrape_fallback_result_respects_max_characters(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"success": True, "data": {"markdown": "", "metadata": {}}}
+            return {"success": True, "data": {"markdown": "fallback content", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(url="https://example.com", maxCharacters=8)
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(parsed["markdown"], "fallback")
         self.assertEqual(len(calls), 2)
 
 

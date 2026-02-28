@@ -408,6 +408,14 @@ def _normalize_exclude_tags(user_tags: Optional[List[Any]]) -> List[str]:
     return _stable_unique_strings(normalized)
 
 
+def _truncate_markdown(markdown: Optional[str], max_chars: Optional[int]) -> Optional[str]:
+    if not isinstance(markdown, str):
+        return markdown
+    if not isinstance(max_chars, int) or max_chars <= 0:
+        return markdown
+    return markdown[:max_chars]
+
+
 def get_country_code_alpha2(country_name: Optional[str]) -> str:
     """
     国家代码解析（已简化）：
@@ -944,12 +952,14 @@ async def firecrawl_search(
 async def firecrawl_scrape(
     url: str,
     excludeTags: Optional[List[str]] = None,
+    maxCharacters: Optional[int] = None,
 ) -> str:
     """
     网页内容抓取接口。
     参数:
         url: 目标网页URL（必填）
-        excludeTags: 追加的排除选择器（可选）
+        excludeTags: 追加的排除选择器，如["script",".nav","[id^=\"category--\"]","img[alt*=\"logo\"]"]（可选）
+        maxCharacters: 截断返回 markdown 的最大字符数；默认不截断。非法值（非整数、<=0）将被忽略。（可选）
     返回:
         JSON字符串
     """
@@ -1025,7 +1035,12 @@ async def firecrawl_scrape(
             f"{api_name_key}请求失败，上游返回缺少 data 对象。",
             extra={"upstream": result}
         )
-    return to_compact_json(transform_scrape_result(result))
+    transformed_result = transform_scrape_result(result)
+    transformed_result["markdown"] = _truncate_markdown(
+        transformed_result.get("markdown"),
+        maxCharacters,
+    )
+    return to_compact_json(transformed_result)
 
 
 # 示例：同步阻塞函数，通过线程池异步调用

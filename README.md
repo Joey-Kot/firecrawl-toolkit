@@ -16,7 +16,7 @@ firecrawl-toolkit: https://pypi.org/project/firecrawl-toolkit/
 - **Automatic Retry Mechanism**: Integrated request retry functionality with exponential backoff strategy automatically handles temporary network fluctuations or server errors, enhancing service stability.
 - **Intelligent Country Code Parsing**: Includes a comprehensive country name dictionary supporting inputs in Chinese, English, ISO Alpha-2/3, and other formats, with automatic normalization.
 - **Response Field Mapping**: Search/Scrape responses are normalized into minimal, client-facing JSON schemas instead of upstream passthrough payloads.
-- **Noise Reduction for Scrape**: Built-in `excludeTags` selector filtering removes common non-content blocks (navigation, ads, sidebars, comments, etc.) to improve signal quality.
+- **Noise Reduction for Scrape**: Built-in `excludeTags` selector filtering removes common non-content blocks (navigation, ads, sidebars, comments, etc.) to improve signal quality. Supports returning a specified length of Markdown characters for truncation.
 - **Flexible Environment Variable Configuration**: Supports fine-tuned service configuration via environment variables.
 - **The Search and Scrape Endpoints perform some request pre-processing and post-processing, which can save quite a few tokens.**
 
@@ -108,7 +108,7 @@ Add the following server configuration in the MCP client configuration file:
 
 ## Tool Parameters and Usage Examples
 
-### firecrawl-search: Perform web / news / images search
+### firecrawl Search: Perform aggregated / web / news / images search
 
 Parameters:
 
@@ -120,7 +120,7 @@ Parameters:
 Example:
 
 ```Python
-result_json = firecrawl_search(
+result_json = firecrawl_web_search(
     query="AI advancements 2024",
     country="United States",
     search_num=5,
@@ -141,7 +141,7 @@ Response (mapped):
 Example response:
 
 ```json
-{"success":true,"data":{"web":[{"title":"Example Web","description":"Example description","url":"https://example.com"}],"news":[],"images":[{"title":"Example Image","imageUrl":"https://img.example.com/1.jpg","url":"https://example.com/image"}]},"creditsUsed":3}
+{"success":true,"data":{"web":[{"title":"Example Web","description":"Example description","url":"https://example.com"}],"news":[],"images":[]},"creditsUsed":1}
 ```
 
 ### firecrawl-scrape: Scrape webpage content
@@ -150,25 +150,30 @@ Parameters:
 
 - `url` (str, required): URL of the target webpage.
 - `excludeTags` (list[str], optional, default `[]`): Additional CSS selectors to exclude; merged with built-in noise-filter selectors after normalization and deduplication.
+- `maxCharacters` (int, optional, default `None`): Truncate only the returned `markdown` to the first N characters. Invalid values (non-int, `<= 0`) are ignored and treated as not provided.
 
 Example:
 
 ```Python
 result_json = firecrawl_scrape(
     url="https://www.example.com",
-    excludeTags=["[class^=\"skip\"]", "[id*=\"disqus\"]"]
+    excludeTags=["[class^=\"skip\"]", "[id*=\"disqus\"]"],
+    maxCharacters=1200
 )
 ```
+This returns at most 1200 characters in `markdown`.
 
 Built-in noise filtering:
 
 - The tool uses an internal `excludeTags` selector set to suppress noisy DOM regions and prioritize main content quality.
 - If the first scrape returns `data.markdown == ""`, the tool automatically retries once without `includeTags`/`excludeTags` as a fallback.
+- `maxCharacters` truncation is applied locally in this toolkit post-processing and is not forwarded to upstream Firecrawl payloads.
 
 Response (mapped):
 
 - Top-level fields: `success`, `proxyUsed`, `title`, `description`, `language`, `markdown`, `creditsUsed`
 - `markdown` is URL-decoded before returning to the client
+- When a valid `maxCharacters` is provided, `markdown` length is capped at that value
 - Missing mapped fields are preserved as `null`
 - Output is compact single-line JSON (no extra spaces)
 
@@ -183,7 +188,6 @@ Example response:
 - `firecrawl-search` and `firecrawl-scrape` success payloads are mapped to stable minimal schemas.
 - Missing mapped fields are preserved as `null` (arrays remain arrays, and may be empty).
 - Both success and error responses are compact single-line JSON.
-- This is a breaking response-contract change for consumers that relied on the old full passthrough structure (`query_details` + `results`).
 
 ## License Agreement
 
