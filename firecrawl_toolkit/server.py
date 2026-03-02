@@ -556,9 +556,9 @@ async def execute_firecrawl_request(
     attempt = 0
     while True:
         try:
-            # 并发控制（如果已在 startup_all 中初始化）
-            if REQUEST_SEMAPHORE:
-                async with REQUEST_SEMAPHORE:
+            # 并发控制（使用 per-endpoint 信号量或全局信号量）
+            if sem:
+                async with sem:
                     response = await client.post(api_url, json=payload, headers=headers)
             else:
                 response = await client.post(api_url, json=payload, headers=headers)
@@ -1051,12 +1051,19 @@ async def run_blocking_task_in_threadpool(blocking_func, *args, **kwargs):
 
 
 async def startup_all():
-    global REQUEST_SEMAPHORE
+    global REQUEST_SEMAPHORE, ENDPOINT_SEMAPHORES
     await AsyncHttpClientManager.startup()
     ThreadPoolManager.startup(max_workers=FIRECRAWL_MAX_WORKERS)
-    # 初始化请求并发信号量
+    # 初始化全局请求并发信号量
     REQUEST_SEMAPHORE = asyncio.Semaphore(FIRECRAWL_MAX_CONCURRENT_REQUESTS)
-    logger.info("已初始化请求并发控制，最大并发请求数: %d，线程池最大工作线程: %d", FIRECRAWL_MAX_CONCURRENT_REQUESTS, FIRECRAWL_MAX_WORKERS)
+    logger.info("已初始化全局请求并发控制，最大并发请求数: %d，线程池最大工作线程: %d", FIRECRAWL_MAX_CONCURRENT_REQUESTS, FIRECRAWL_MAX_WORKERS)
+
+    # 初始化 per-endpoint 并发信号量（基于 FIRECRAWL_ENDPOINT_CONCURRENCY 环境变量）
+    for endpoint_name, max_concurrent in PER_ENDPOINT_MAX_CONCURRENT.items():
+        if isinstance(max_concurrent, int) and max_concurrent > 0:
+            ENDPOINT_SEMAPHORES[endpoint_name] = asyncio.Semaphore(max_concurrent)
+            logger.info("已为端点 '%s' 初始化专用并发控制，最大并发数: %d", endpoint_name, max_concurrent)
+
     # 可以扩展这里做更多初始化
 
 
