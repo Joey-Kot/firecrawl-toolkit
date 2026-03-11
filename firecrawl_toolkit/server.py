@@ -394,7 +394,7 @@ def _stable_unique_strings(values: List[str]) -> List[str]:
     return result
 
 
-def _normalize_exclude_tags(user_tags: Optional[List[Any]]) -> List[str]:
+def _normalize_selector_tags(user_tags: Optional[List[Any]]) -> List[str]:
     if not isinstance(user_tags, list):
         return []
     normalized: List[str] = []
@@ -406,6 +406,10 @@ def _normalize_exclude_tags(user_tags: Optional[List[Any]]) -> List[str]:
             continue
         normalized.append(cleaned)
     return _stable_unique_strings(normalized)
+
+
+def _normalize_exclude_tags(user_tags: Optional[List[Any]]) -> List[str]:
+    return _normalize_selector_tags(user_tags)
 
 
 def _truncate_markdown(markdown: Optional[str], max_chars: Optional[int]) -> Optional[str]:
@@ -952,14 +956,20 @@ async def firecrawl_search(
 async def firecrawl_scrape(
     url: str,
     excludeTags: Optional[List[str]] = None,
+    includeTags: Optional[List[str]] = None,
     maxCharacters: Optional[int] = None,
+    emptyTags: bool = False,
+    headers: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     网页内容抓取接口。
     参数:
         url: 目标网页URL（必填）
         excludeTags: 追加的排除选择器，如["script",".nav","[id^=\"category--\"]","img[alt*=\"logo\"]"]（可选）
+        includeTags: 追加的包含选择器；无内置默认值，仅透传用户传入内容。（可选）
         maxCharacters: 截断返回 markdown 的最大字符数；默认不截断。非法值（非整数、<=0）将被忽略。（可选）
+        emptyTags: 是否清空内置 excludeTags；为 True 时仅保留用户传入的 excludeTags。（可选）
+        headers: 根级请求头对象；仅当传入非空字典时透传到上游 scrape 请求。（可选）
     返回:
         JSON字符串
     """
@@ -972,14 +982,16 @@ async def firecrawl_scrape(
         return compact_error_response("参数 url 必填且不能为空字符串。")
 
     normalized_user_exclude_tags = _normalize_exclude_tags(excludeTags)
+    normalized_user_include_tags = _normalize_selector_tags(includeTags)
+    resolved_exclude_tags = normalized_user_exclude_tags if emptyTags else _stable_unique_strings(
+        DEFAULT_SCRAPE_EXCLUDE_TAGS + normalized_user_exclude_tags
+    )
     payload: Dict[str, Any] = {
         "url": url,
         "formats": ["markdown"],
         "onlyMainContent": True,
-        "includeTags": [],
-        "excludeTags": _stable_unique_strings(DEFAULT_SCRAPE_EXCLUDE_TAGS + normalized_user_exclude_tags),
+        "excludeTags": resolved_exclude_tags,
         "maxAge": 172800000,
-        "headers": {},
         "waitFor": 0,
         "mobile": False,
         "skipTlsVerification": True,
@@ -990,6 +1002,10 @@ async def firecrawl_scrape(
         "proxy": "auto",
         "storeInCache": True,
     }
+    if includeTags is not None:
+        payload["includeTags"] = normalized_user_include_tags
+    if headers:
+        payload["headers"] = headers
 
     result = await execute_firecrawl_request(api_url, payload, api_name_key)
     if (

@@ -149,23 +149,58 @@ Example response:
 Parameters:
 
 - `url` (str, required): URL of the target webpage.
-- `excludeTags` (list[str], optional, default `[]`): Additional CSS selectors to exclude; merged with built-in noise-filter selectors after normalization and deduplication.
+- `excludeTags` (list[str], optional, default `[]`): Additional CSS selectors to exclude; merged with built-in noise-filter selectors after normalization and deduplication unless `emptyTags=True`.
+- `includeTags` (list[str], optional, default `None`): Additional CSS selectors to include; no built-in defaults are applied, and the cleaned list is forwarded only when this parameter is provided.
 - `maxCharacters` (int, optional, default `None`): Truncate only the returned `markdown` to the first N characters. Invalid values (non-int, `<= 0`) are ignored and treated as not provided.
+- `emptyTags` (bool, optional, default `False`): Clear the built-in exclude selector list for this request, while still keeping any user-provided `excludeTags`.
+- `headers` (dict[str, str], optional, default `None`): Root-level request headers passed through to the upstream scrape request only when a non-empty object is provided.
 
 Example:
 
 ```Python
 result_json = firecrawl_scrape(
     url="https://www.example.com",
+    includeTags=["article", ".content"],
     excludeTags=["[class^=\"skip\"]", "[id*=\"disqus\"]"],
-    maxCharacters=1200
+    maxCharacters=1200,
+    headers={"Authorization": "Bearer token", "X-Trace-Id": "abc123"}
 )
 ```
 This returns at most 1200 characters in `markdown`.
 
+To explicitly send an empty include selector list:
+
+```Python
+result_json = firecrawl_scrape(
+    url="https://www.example.com",
+    includeTags=[]
+)
+```
+
+To disable only the built-in exclude selectors for one request:
+
+```Python
+result_json = firecrawl_scrape(
+    url="https://www.example.com",
+    emptyTags=True
+)
+```
+
+To disable the built-in exclude selectors but keep your own:
+
+```Python
+result_json = firecrawl_scrape(
+    url="https://www.example.com",
+    excludeTags=[".nav"],
+    emptyTags=True
+)
+```
+
 Built-in noise filtering:
 
 - The tool uses an internal `excludeTags` selector set to suppress noisy DOM regions and prioritize main content quality.
+- `includeTags` has no built-in defaults and is only forwarded when explicitly provided.
+- Passing `emptyTags=True` clears only the built-in exclude selector set for that request.
 - If the first scrape returns `data.markdown == ""`, the tool automatically retries once without `includeTags`/`excludeTags` as a fallback.
 - `maxCharacters` truncation is applied locally in this toolkit post-processing and is not forwarded to upstream Firecrawl payloads.
 

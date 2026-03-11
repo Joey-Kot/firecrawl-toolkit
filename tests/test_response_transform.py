@@ -248,6 +248,185 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("script", sent_exclude_tags)
         self.assertIn("[class^=\\\"skip\\\"]", sent_exclude_tags)
         self.assertEqual(sent_exclude_tags.count("[id*=\\\"disqus\\\"]"), 1)
+        self.assertNotIn("includeTags", calls[0])
+        self.assertNotIn("headers", calls[0])
+
+    async def test_scrape_include_tags_are_normalized_deduped_and_forwarded(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                includeTags=[" article ", ".content", ".content", None, 123],
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(calls[0]["includeTags"], ["article", ".content"])
+
+    async def test_scrape_empty_include_tags_are_forwarded_as_empty_list(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                includeTags=[],
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(calls[0]["includeTags"], [])
+
+    async def test_scrape_include_tags_work_independently_with_empty_tags(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                includeTags=["article"],
+                excludeTags=[".nav"],
+                emptyTags=True,
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(calls[0]["includeTags"], ["article"])
+        self.assertEqual(calls[0]["excludeTags"], [".nav"])
+
+    async def test_scrape_empty_tags_true_without_user_exclude_tags_sends_empty_list(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                emptyTags=True,
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(calls[0]["excludeTags"], [])
+
+    async def test_scrape_empty_tags_true_keeps_only_user_exclude_tags(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                excludeTags=[".nav", "[id*=\"disqus\"]", ".nav"],
+                emptyTags=True,
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(calls[0]["excludeTags"], [".nav", "[id*=\"disqus\"]"])
+        self.assertNotIn("script", calls[0]["excludeTags"])
+
+    async def test_scrape_empty_tags_false_keeps_default_merge_behavior(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                excludeTags=[".nav"],
+                emptyTags=False,
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertIn("script", calls[0]["excludeTags"])
+        self.assertIn(".nav", calls[0]["excludeTags"])
+
+    async def test_scrape_non_empty_headers_are_forwarded_at_root(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                headers={"Authorization": "Bearer token", "X-Test": "1"},
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["headers"], {"Authorization": "Bearer token", "X-Test": "1"})
+
+    async def test_scrape_empty_headers_are_not_forwarded(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                headers={},
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("headers", calls[0])
 
     async def test_scrape_empty_markdown_triggers_fallback_without_tag_keys(self):
         calls = []
@@ -269,8 +448,61 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["success"], True)
         self.assertEqual(parsed["markdown"], "fallback")
         self.assertEqual(len(calls), 2)
-        self.assertIn("includeTags", calls[0])
         self.assertIn("excludeTags", calls[0])
+        self.assertNotIn("includeTags", calls[1])
+        self.assertNotIn("excludeTags", calls[1])
+
+    async def test_scrape_fallback_removes_include_tags_when_initial_request_had_them(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"success": True, "data": {"markdown": "", "metadata": {}}}
+            return {"success": True, "data": {"markdown": "fallback", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                includeTags=["article"],
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(parsed["markdown"], "fallback")
+        self.assertEqual(calls[0]["includeTags"], ["article"])
+        self.assertNotIn("includeTags", calls[1])
+        self.assertNotIn("excludeTags", calls[1])
+
+    async def test_scrape_fallback_preserves_headers(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"success": True, "data": {"markdown": "", "metadata": {}}}
+            return {"success": True, "data": {"markdown": "fallback", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                headers={"Authorization": "Bearer token"},
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(parsed["markdown"], "fallback")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["headers"], {"Authorization": "Bearer token"})
+        self.assertEqual(calls[1]["headers"], {"Authorization": "Bearer token"})
         self.assertNotIn("includeTags", calls[1])
         self.assertNotIn("excludeTags", calls[1])
 
