@@ -1,6 +1,6 @@
 import os
+import sys
 import tempfile
-import httpx
 import asyncio
 import json
 import logging
@@ -10,12 +10,26 @@ import random
 import threading
 from urllib.parse import unquote
 from typing import Optional, Dict, Any, Union, List
-from dotenv import load_dotenv
-from fastmcp import FastMCP
 from concurrent.futures import ThreadPoolExecutor
 
-logging.basicConfig(level=logging.INFO)
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+if _env_enabled("FIRECRAWL_MCP_ENABLE_STDIO", False):
+    # In stdio transport, keep stderr/stdout clean for MCP protocol frames only.
+    logging.disable(logging.CRITICAL)
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+else:
+    logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+import httpx
+from dotenv import load_dotenv
+from fastmcp import FastMCP
 
 load_dotenv()
 
@@ -1144,13 +1158,6 @@ def _release_process_lock(lock_handle, lock_path: str):
                 pass
     except Exception:
         pass
-
-
-def _env_enabled(name: str, default: bool = False) -> bool:
-    v = os.getenv(name)
-    if v is None:
-        return default
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 def main():
