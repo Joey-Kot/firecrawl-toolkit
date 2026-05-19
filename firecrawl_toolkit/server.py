@@ -426,12 +426,17 @@ def _normalize_exclude_tags(user_tags: Optional[List[Any]]) -> List[str]:
     return _normalize_selector_tags(user_tags)
 
 
-def _truncate_markdown(markdown: Optional[str], max_chars: Optional[int]) -> Optional[str]:
+def _truncate_markdown(
+    markdown: Optional[str],
+    max_chars: Optional[int],
+    start_index: Optional[int] = 0,
+) -> Optional[str]:
     if not isinstance(markdown, str):
         return markdown
+    normalized_start = start_index if isinstance(start_index, int) and start_index >= 0 else 0
     if not isinstance(max_chars, int) or max_chars <= 0:
         return markdown
-    return markdown[:max_chars]
+    return markdown[normalized_start:normalized_start + max_chars]
 
 
 def get_country_code_alpha2(country_name: Optional[str]) -> str:
@@ -627,7 +632,7 @@ async def execute_firecrawl_request(
 
 
 @mcp.tool(name="firecrawl-aggregated-search")
-async def firecrawl_search(
+async def firecrawl_aggregated_search(
     query: str,
     country: Optional[str] = None,
     search_num: int = 20,
@@ -712,7 +717,7 @@ async def firecrawl_search(
 
 
 @mcp.tool(name="firecrawl-web-search")
-async def firecrawl_search(
+async def firecrawl_web_search(
     query: str,
     country: Optional[str] = None,
     search_num: int = 20,
@@ -797,7 +802,7 @@ async def firecrawl_search(
 
 
 @mcp.tool(name="firecrawl-news-search")
-async def firecrawl_search(
+async def firecrawl_news_search(
     query: str,
     country: Optional[str] = None,
     search_num: int = 20,
@@ -882,7 +887,7 @@ async def firecrawl_search(
 
 
 @mcp.tool(name="firecrawl-image-search")
-async def firecrawl_search(
+async def firecrawl_image_search(
     query: str,
     country: Optional[str] = None,
     search_num: int = 20,
@@ -974,6 +979,7 @@ async def firecrawl_scrape(
     maxCharacters: Optional[int] = None,
     emptyTags: bool = False,
     headers: Optional[Dict[str, str]] = None,
+    startIndex: Optional[int] = 0,
 ) -> str:
     """
     网页内容抓取接口。
@@ -981,7 +987,8 @@ async def firecrawl_scrape(
         url: 目标网页URL（必填）
         excludeTags: 追加的排除选择器，如["script",".nav","[id^=\"category--\"]","img[alt*=\"logo\"]"]（可选）
         includeTags: 追加的包含选择器；无内置默认值，仅透传用户传入内容。（可选）
-        maxCharacters: 截断返回 markdown 的最大字符数；默认不截断。非法值（非整数、<=0）将被忽略。（可选）
+        maxCharacters: 从 startIndex 起截断返回 markdown 的最大字符数；默认不截断。非法值（非整数、<=0）将被忽略。（可选）
+        startIndex: markdown 截断起始下标；默认 0。非法值（非整数、<0）按 0 处理。（可选）
         emptyTags: 是否清空内置 excludeTags；为 True 时仅保留用户传入的 excludeTags。（可选）
         headers: 根级请求头对象；仅当传入非空字典时透传到上游 scrape 请求。（可选）
     返回:
@@ -1069,6 +1076,7 @@ async def firecrawl_scrape(
     transformed_result["markdown"] = _truncate_markdown(
         transformed_result.get("markdown"),
         maxCharacters,
+        startIndex,
     )
     return to_compact_json(transformed_result)
 

@@ -540,6 +540,50 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["success"], True)
         self.assertEqual(parsed["markdown"], "hello")
 
+    async def test_scrape_start_index_with_max_characters_slices_markdown(self):
+        async def fake_execute(*_args, **_kwargs):
+            return {"success": True, "data": {"markdown": "hello world", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                startIndex=6,
+                maxCharacters=5,
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(parsed["markdown"], "world")
+
+    async def test_scrape_invalid_start_index_defaults_to_zero(self):
+        async def fake_execute(*_args, **_kwargs):
+            return {"success": True, "data": {"markdown": "hello world", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out_negative = await server.firecrawl_scrape(
+                url="https://example.com",
+                startIndex=-1,
+                maxCharacters=5,
+            )
+            out_non_int = await server.firecrawl_scrape(
+                url="https://example.com",
+                startIndex="6",
+                maxCharacters=5,
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed_negative = json.loads(out_negative)
+        parsed_non_int = json.loads(out_non_int)
+        self.assertEqual(parsed_negative["markdown"], "hello")
+        self.assertEqual(parsed_non_int["markdown"], "hello")
+
     async def test_scrape_max_characters_equal_or_greater_than_length(self):
         async def fake_execute(*_args, **_kwargs):
             return {"success": True, "data": {"markdown": "hello", "metadata": {}}}

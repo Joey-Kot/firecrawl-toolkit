@@ -16,7 +16,7 @@ firecrawl-toolkit: https://pypi.org/project/firecrawl-toolkit/
 - **Automatic Retry Mechanism**: Integrated request retry functionality with exponential backoff strategy automatically handles temporary network fluctuations or server errors, enhancing service stability.
 - **Intelligent Country Code Parsing**: Includes a comprehensive country name dictionary supporting inputs in Chinese, English, ISO Alpha-2/3, and other formats, with automatic normalization.
 - **Response Field Mapping**: Search/Scrape responses are normalized into minimal, client-facing JSON schemas instead of upstream passthrough payloads.
-- **Noise Reduction for Scrape**: Built-in `excludeTags` selector filtering removes common non-content blocks (navigation, ads, sidebars, comments, etc.) to improve signal quality. Supports returning a specified length of Markdown characters for truncation.
+- **Noise Reduction for Scrape**: Built-in `excludeTags` selector filtering removes common non-content blocks (navigation, ads, sidebars, comments, etc.) to improve signal quality. Supports returning a specified Markdown character window with `startIndex` and `maxCharacters`.
 - **Flexible Environment Variable Configuration**: Supports fine-tuned service configuration via environment variables.
 - **The Search and Scrape Endpoints perform some request pre-processing and post-processing, which can save quite a few tokens.**
 
@@ -151,7 +151,8 @@ Parameters:
 - `url` (str, required): URL of the target webpage.
 - `excludeTags` (list[str], optional, default `[]`): Additional CSS selectors to exclude; merged with built-in noise-filter selectors after normalization and deduplication unless `emptyTags=True`.
 - `includeTags` (list[str], optional, default `None`): Additional CSS selectors to include; no built-in defaults are applied, and the cleaned list is forwarded only when this parameter is provided.
-- `maxCharacters` (int, optional, default `None`): Truncate only the returned `markdown` to the first N characters. Invalid values (non-int, `<= 0`) are ignored and treated as not provided.
+- `maxCharacters` (int, optional, default `None`): Truncate only the returned `markdown` to N characters starting at `startIndex`. Invalid values (non-int, `<= 0`) are ignored and treated as not provided.
+- `startIndex` (int, optional, default `0`): Start offset used with `maxCharacters` when slicing returned `markdown`. Invalid values (non-int, `< 0`) are treated as `0`.
 - `emptyTags` (bool, optional, default `False`): Clear the built-in exclude selector list for this request, while still keeping any user-provided `excludeTags`.
 - `headers` (dict[str, str], optional, default `None`): Root-level request headers passed through to the upstream scrape request only when a non-empty object is provided.
 
@@ -162,11 +163,12 @@ result_json = firecrawl_scrape(
     url="https://www.example.com",
     includeTags=["article", ".content"],
     excludeTags=["[class^=\"skip\"]", "[id*=\"disqus\"]"],
+    startIndex=0,
     maxCharacters=1200,
     headers={"Authorization": "Bearer token", "X-Trace-Id": "abc123"}
 )
 ```
-This returns at most 1200 characters in `markdown`.
+This returns at most 1200 characters in `markdown`, starting at character index 0.
 
 To explicitly send an empty include selector list:
 
@@ -202,13 +204,13 @@ Built-in noise filtering:
 - `includeTags` has no built-in defaults and is only forwarded when explicitly provided.
 - Passing `emptyTags=True` clears only the built-in exclude selector set for that request.
 - If the first scrape returns `data.markdown == ""`, the tool automatically retries once without `includeTags`/`excludeTags` as a fallback.
-- `maxCharacters` truncation is applied locally in this toolkit post-processing and is not forwarded to upstream Firecrawl payloads.
+- `startIndex` / `maxCharacters` slicing is applied locally in this toolkit post-processing and is not forwarded to upstream Firecrawl payloads.
 
 Response (mapped):
 
 - Top-level fields: `success`, `proxyUsed`, `title`, `description`, `language`, `markdown`, `creditsUsed`
 - `markdown` is URL-decoded before returning to the client
-- When a valid `maxCharacters` is provided, `markdown` length is capped at that value
+- When a valid `maxCharacters` is provided, `markdown` length is capped at that value after applying `startIndex`
 - Missing mapped fields are preserved as `null`
 - Output is compact single-line JSON (no extra spaces)
 
