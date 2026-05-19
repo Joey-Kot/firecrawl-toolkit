@@ -171,7 +171,7 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         old_execute = server.execute_firecrawl_request
         server.execute_firecrawl_request = fake_execute
         try:
-            out = await server.firecrawl_search(query="ai")
+            out = await server.firecrawl_aggregated_search(query="ai")
         finally:
             server.execute_firecrawl_request = old_execute
 
@@ -194,7 +194,7 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         old_execute = server.execute_firecrawl_request
         server.execute_firecrawl_request = fake_execute
         try:
-            out = await server.firecrawl_search(query="ai")
+            out = await server.firecrawl_aggregated_search(query="ai")
         finally:
             server.execute_firecrawl_request = old_execute
 
