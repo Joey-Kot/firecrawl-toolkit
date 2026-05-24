@@ -40,7 +40,21 @@ try:
 except Exception:
     m = None
 
+def _parse_api_keys(value: Optional[str]) -> List[str]:
+    """Parse FIRECRAWL_API_KEY as a comma-separated key pool."""
+    if not value:
+        return []
+    return [key.strip() for key in value.split(",") if key.strip()]
+
+
+def _select_api_key() -> Optional[str]:
+    if not API_KEYS:
+        return None
+    return random.choice(API_KEYS)
+
+
 API_KEY: Optional[str] = os.getenv("FIRECRAWL_API_KEY")
+API_KEYS: List[str] = _parse_api_keys(API_KEY)
 mcp = FastMCP("firecrawl-mcp")
 
 # 加载本地国家别名字典 (data/country_aliases.json)
@@ -554,14 +568,9 @@ async def execute_firecrawl_request(
     执行对 Firecrawl API 的异步请求，包含并发控制与重试策略。
     返回解析后的 JSON 或错误描述字典，或 None（当缺少 API_KEY 时）。
     """
-    if not API_KEY:
+    if not API_KEYS:
         logger.error("未配置FIRECRAWL_API_KEY，无法调用 %s 接口。", api_name)
         return None
-
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
 
     try:
         client = AsyncHttpClientManager.get_client()
@@ -579,6 +588,16 @@ async def execute_firecrawl_request(
     attempt = 0
     while True:
         try:
+            api_key = _select_api_key()
+            if not api_key:
+                logger.error("未配置可用的FIRECRAWL_API_KEY，无法调用 %s 接口。", api_name)
+                return None
+
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+
             # 并发控制（使用 per-endpoint 信号量或全局信号量）
             if sem:
                 async with sem:
@@ -982,17 +1001,17 @@ async def firecrawl_scrape(
     startIndex: Optional[int] = 0,
 ) -> str:
     """
-    网页内容抓取接口。
-    参数:
-        url: 目标网页URL（必填）
-        excludeTags: 追加的排除选择器，如["script",".nav","[id^=\"category--\"]","img[alt*=\"logo\"]"]（可选）
-        includeTags: 追加的包含选择器；无内置默认值，仅透传用户传入内容。（可选）
-        maxCharacters: 从 startIndex 起截断返回 markdown 的最大字符数；默认不截断。非法值（非整数、<=0）将被忽略。（可选）
-        startIndex: markdown 截断起始下标；默认 0。非法值（非整数、<0）按 0 处理。（可选）
-        emptyTags: 是否清空内置 excludeTags；为 True 时仅保留用户传入的 excludeTags。（可选）
-        headers: 根级请求头对象；仅当传入非空字典时透传到上游 scrape 请求。（可选）
-    返回:
-        JSON字符串
+    Web content scraping endpoint.
+    Parameters:
+        url: Target webpage URL. Required.
+        excludeTags: Additional selectors to exclude, such as ["script", ".nav", "[id^=\"category--\"]", "img[alt*=\"logo\"]"]. Optional.
+        includeTags: Additional selectors to include. No built-in defaults are applied; user-provided values are forwarded as-is. Optional.
+        maxCharacters: Maximum number of markdown characters to return from startIndex. Defaults to no truncation. Invalid values (non-integer or <= 0) are ignored. Optional.
+        startIndex: Starting index for markdown truncation. Defaults to 0. Invalid values (non-integer or < 0) are treated as 0. Optional.
+        emptyTags: Whether to clear the built-in excludeTags. When True, only user-provided excludeTags are kept. Optional.
+        headers: Root-level request headers. Forwarded to the upstream scrape request only when a non-empty dictionary is provided. Optional.
+    Returns:
+        JSON string.
     """
     api_name_key = "scrape"
     api_url = API_ENDPOINTS.get(api_name_key)
@@ -1169,14 +1188,14 @@ def _release_process_lock(lock_handle, lock_path: str):
 
 
 def main():
-    if not API_KEY:
+    if not API_KEYS:
         logger.error("警告：环境变量 FIRECRAWL_API_KEY 未设置，启动后所有接口调用均不可用。")
         logger.error("要快速修复：在项目根目录创建一个名为 .env 的文件，添加一行：FIRECRAWL_API_KEY=\"<your-api-key>\"。")
         logger.error("示例（Linux / macOS）：\n  echo 'FIRECRAWL_API_KEY=\"fc-xxxxxxxxxx\"' > .env")
         logger.error("或者使用 printf：\n  printf 'FIRECRAWL_API_KEY=\"fc-xxxxxxxxxx\"\n' > .env")
         logger.error("完成后重新启动服务。若你已经使用容器或进程管理器，请将该环境变量注入容器/服务配置中。")
     else:
-        logger.info("加载到FIRECRAWL_API_KEY，准备启动Firecrawl MCP工具接口服务。")
+        logger.info("加载到 %d 个 FIRECRAWL_API_KEY，准备启动Firecrawl MCP工具接口服务。", len(API_KEYS))
 
     # === 互斥启动选择：必须显式开启且只能开启一个 ===
     enable_stdio = _env_enabled("FIRECRAWL_MCP_ENABLE_STDIO", False)

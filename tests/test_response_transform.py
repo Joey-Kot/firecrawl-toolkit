@@ -72,6 +72,44 @@ from firecrawl_toolkit import server
 
 
 class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
+    def test_parse_api_keys_splits_commas_and_ignores_empty_entries(self):
+        self.assertEqual(server._parse_api_keys(" key-1, key-2 ,,key-3 "), ["key-1", "key-2", "key-3"])
+        self.assertEqual(server._parse_api_keys(" , "), [])
+        self.assertEqual(server._parse_api_keys(None), [])
+
+    async def test_execute_firecrawl_request_uses_random_api_key(self):
+        class _FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"success": True}
+
+        class _FakeClient:
+            def __init__(self):
+                self.headers = []
+
+            async def post(self, _api_url, json=None, headers=None):
+                self.headers.append(headers)
+                return _FakeResponse()
+
+        fake_client = _FakeClient()
+        old_keys = server.API_KEYS
+        old_client = server.AsyncHttpClientManager._client
+        old_choice = server.random.choice
+        server.API_KEYS = ["key-1", "key-2"]
+        server.AsyncHttpClientManager._client = fake_client
+        server.random.choice = lambda keys: keys[1]
+        try:
+            result = await server.execute_firecrawl_request("https://example.com", {"q": "ai"}, "search")
+        finally:
+            server.random.choice = old_choice
+            server.AsyncHttpClientManager._client = old_client
+            server.API_KEYS = old_keys
+
+        self.assertEqual(result, {"success": True})
+        self.assertEqual(fake_client.headers[0]["Authorization"], "Bearer key-2")
+
     def test_transform_search_result_full_mapping(self):
         raw = {
             "success": True,

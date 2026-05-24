@@ -52,7 +52,7 @@ Create a `.env` file in the project root directory and enter your Firecrawl API 
 
 | Environment Variables | Default value | Description |
 | :---: | :---: | :--- |
-| `FIRECRAWL_API_KEY` | fc-xxx | your-firecrawl-api-key-here |
+| `FIRECRAWL_API_KEY` | fc-xxx | Your Firecrawl API key. Multiple keys can be separated by commas, and one will be selected randomly for each request. |
 | `FIRECRAWL_HTTP2` | 0 | Disable or enable HTTP2, <0/1> |
 | `FIRECRAWL_MAX_WORKERS` | 10 | Number of processes |
 | `FIRECRAWL_MAX_CONNECTIONS` | 200 | Maximum number of connections |
