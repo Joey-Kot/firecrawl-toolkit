@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  python-test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -46,3 +47,112 @@ jobs:
 
       - name: Validate distributions
         run: python -m twine check dist/*
+
+  go-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Run Go tests
+        working-directory: cli
+        run: go test ./...
+
+  build-cli:
+    runs-on: ubuntu-latest
+    needs: go-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            ext: .exe
+          - goos: windows
+            goarch: arm64
+            ext: .exe
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build CLI
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          EXT: ${{ matrix.ext }}
+          CGO_ENABLED: "0"
+        working-directory: cli
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o "dist/firecrawl_${GOOS}_${GOARCH}${EXT}" .
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firecrawl-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: cli/dist/*
+          if-no-files-found: error
+
+  release-cli:
+    runs-on: ubuntu-latest
+    needs: [python-test, go-test, build-cli]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firecrawl-*
+          path: cli/dist
+          merge-multiple: true
+
+      - name: Move Latest tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f Latest "$GITHUB_SHA"
+          git push origin Latest --force
+
+      - name: Ensure Latest release exists
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view Latest >/dev/null 2>&1 || gh release create Latest --title "Latest" --notes "Latest CLI builds"
+
+      - name: Upload CLI binaries to Latest release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload Latest cli/dist/* --clobber

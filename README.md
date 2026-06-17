@@ -106,6 +106,133 @@ Add the following server configuration in the MCP client configuration file:
 }
 ```
 
+## Go CLI
+
+The Go CLI is located in the `cli` directory. It is a standalone command-line client named `firecrawl`, separate from the Python MCP server.
+
+The CLI reads the API key only from `FIRECRAWL_KEY`:
+
+```bash
+export FIRECRAWL_KEY="<Your Firecrawl API key>"
+```
+
+### Build From Source
+
+Build for the current platform:
+
+```bash
+cd cli
+go test ./...
+go build -o firecrawl .
+```
+
+Run it directly after building:
+
+```bash
+./firecrawl --help
+```
+
+Build all release targets locally:
+
+```bash
+cd cli
+mkdir -p dist
+
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_windows_amd64.exe .
+CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_windows_arm64.exe .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_linux_amd64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_linux_arm64 .
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_darwin_amd64 .
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_darwin_arm64 .
+```
+
+### CLI Search Usage
+
+Search commands:
+
+```bash
+firecrawl aggregated --query "AI advancements 2024" --country "United States" --search-num 5 --search-time month
+firecrawl web --query "AI advancements 2024" --country US --search-num 5
+firecrawl news --query "OpenAI news" --search-time week
+firecrawl image --query "firecrawl logo" --search-num 10
+```
+
+Search command parameters:
+
+- `--query` (required): Search keywords.
+- `--country` (optional): Country or region name / ISO code. Default is `US`.
+- `--search-num` (optional): Number of results, range `1`-`100`. Default is `20`.
+- `--search-time` (optional): One of `hour`, `day`, `week`, `month`, `year`.
+
+Search commands output compact single-line JSON, using the same mapped fields as the Python search tools:
+
+```json
+{"success":true,"data":{"web":[],"news":[],"images":[]},"creditsUsed":1}
+```
+
+### CLI Credit Usage
+
+Check team credit usage:
+
+```bash
+firecrawl credit-usage
+firecrawl credit-usage --pretty
+```
+
+Credit usage command parameters:
+
+- `--json` (optional): Output JSON. JSON is the default output format.
+- `--pretty` (optional): Pretty-print JSON output.
+
+Default output is compact JSON:
+
+```json
+{"success":true,"data":{"remainingCredits":1000,"planCredits":500000,"billingPeriodStart":"2025-01-01T00:00:00Z","billingPeriodEnd":"2025-01-31T23:59:59Z"}}
+```
+
+### CLI Scrape Usage
+
+Scrape a page and save the markdown export as `example.md` in the current directory:
+
+```bash
+firecrawl scrape \
+  --output example \
+  --url "https://www.example.com" \
+  --include-tags '["article",".content"]' \
+  --exclude-tags ".nav,.footer" \
+  --start-index 0 \
+  --max-characters 1200 \
+  --headers '{"X-Trace-Id":"abc123"}'
+```
+
+Scrape command parameters:
+
+- `--output` (required): Export name. The CLI writes `<output>.md` in the current directory.
+- `--url` (required): Target webpage URL.
+- `--include-tags` (optional): CSS selectors to include. Accepts a comma-separated string or JSON string array.
+- `--exclude-tags` (optional): Additional CSS selectors to exclude. Accepts a comma-separated string or JSON string array.
+- `--start-index` (optional): Markdown truncation start index. Must be `>= 0`. Default is `0`.
+- `--max-characters` (optional): Maximum markdown characters from `--start-index`. Must be `> 0` when provided.
+- `--headers` (optional): JSON object with string values, for example `{"Authorization":"Bearer token","X-Trace-Id":"abc123"}`.
+
+Scrape output:
+
+- On success, stdout is `true`, and the CLI writes `<output>.md`.
+- On failure, stdout is `false` followed by the error reason, and no file is created or overwritten.
+
+The generated markdown file uses this structure:
+
+```markdown
+## title:
+## description:
+## language:
+## creditsUsed:
+
+---
+
+markdown content
+```
+
 ## Tool Parameters and Usage Examples
 
 ### firecrawl Search: Perform aggregated / web / news / images search
