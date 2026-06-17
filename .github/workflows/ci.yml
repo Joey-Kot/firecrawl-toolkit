@@ -73,22 +73,16 @@ jobs:
         include:
           - goos: windows
             goarch: amd64
-            ext: .exe
           - goos: windows
             goarch: arm64
-            ext: .exe
           - goos: linux
             goarch: amd64
-            ext: ""
           - goos: linux
             goarch: arm64
-            ext: ""
           - goos: darwin
             goarch: amd64
-            ext: ""
           - goos: darwin
             goarch: arm64
-            ext: ""
 
     steps:
       - name: Checkout
@@ -103,12 +97,28 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          EXT: ${{ matrix.ext }}
           CGO_ENABLED: "0"
         working-directory: cli
         run: |
-          mkdir -p dist
-          go build -trimpath -ldflags="-s -w" -o "dist/firecrawl_${GOOS}_${GOARCH}${EXT}" .
+          mkdir -p dist build
+
+          binary="firecrawl"
+          package="firecrawl_${GOOS}_${GOARCH}.tar.gz"
+
+          if [ "$GOOS" = "windows" ]; then
+            binary="firecrawl.exe"
+            package="firecrawl_${GOOS}_${GOARCH}.zip"
+          fi
+
+          go build -trimpath -ldflags="-s -w" -o "build/${binary}" .
+
+          if [ "$GOOS" = "windows" ]; then
+            (cd build && zip -q "../dist/${package}" "${binary}")
+          else
+            tar -C build -czf "dist/${package}" "${binary}"
+          fi
+
+          (cd dist && sha256sum "${package}" > "${package}.sha256")
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
@@ -136,6 +146,13 @@ jobs:
           pattern: firecrawl-*
           path: cli/dist
           merge-multiple: true
+
+      - name: Generate checksum manifest
+        working-directory: cli/dist
+        run: |
+          find . -maxdepth 1 -type f ! -name '*.sha256' ! -name 'SHA256SUMS' -printf '%f\n' \
+            | sort \
+            | xargs sha256sum > SHA256SUMS
 
       - name: Move Latest tag
         env:
