@@ -117,6 +117,14 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		if _, ok := payload["maxCharacters"]; ok {
 			t.Fatal("maxCharacters must not be forwarded upstream")
 		}
+		includeTags := payload["includeTags"].([]any)
+		if len(includeTags) != 2 || includeTags[0] != "article" || includeTags[1] != ".content" {
+			t.Fatalf("includeTags = %#v", includeTags)
+		}
+		excludeTags := payload["excludeTags"].([]any)
+		if len(excludeTags) != 1 || excludeTags[0] != ".nav" {
+			t.Fatalf("excludeTags = %#v", excludeTags)
+		}
 		headers := payload["headers"].(map[string]any)
 		if headers["X-Trace-Id"] != "abc123" {
 			t.Fatalf("headers = %#v", headers)
@@ -145,6 +153,7 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		"--url", "https://example.com",
 		"--include-tags", `["article",".content"]`,
 		"--exclude-tags", ".nav",
+		"--empty-tags",
 		"--start-index", "6",
 		"--max-characters", "12",
 		"--headers", `{"X-Trace-Id":"abc123"}`,
@@ -170,6 +179,26 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("export content missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestBuildScrapePayloadEmptyTags(t *testing.T) {
+	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil)
+	excludeTags := payload["excludeTags"].([]string)
+	if strings.Join(excludeTags, ",") != ".nav,script" {
+		t.Fatalf("excludeTags = %#v", excludeTags)
+	}
+
+	payload = buildScrapePayload("https://example.com", nil, nil, true, nil)
+	excludeTags = payload["excludeTags"].([]string)
+	if len(excludeTags) != 0 {
+		t.Fatalf("excludeTags = %#v", excludeTags)
+	}
+
+	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil)
+	excludeTags = payload["excludeTags"].([]string)
+	if !containsString(excludeTags, "script") || !containsString(excludeTags, ".nav") {
+		t.Fatalf("excludeTags should include built-in and user selectors, got %#v", excludeTags)
 	}
 }
 
@@ -275,4 +304,13 @@ func jsonResponse(status int, body string) *http.Response {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

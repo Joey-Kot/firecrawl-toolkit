@@ -200,6 +200,7 @@ firecrawl scrape \
   --url "https://www.example.com" \
   --include-tags '["article",".content"]' \
   --exclude-tags ".nav,.footer" \
+  --empty-tags \
   --start-index 0 \
   --max-characters 1200 \
   --headers '{"X-Trace-Id":"abc123"}'
@@ -233,6 +234,9 @@ firecrawl scrape --output page --url "https://www.example.com" --include-tags '[
 # Exclusion selectors
 firecrawl scrape --output page --url "https://www.example.com" --exclude-tags '["nav[aria-label=\"Breadcrumb\"]","aside.related",".promo-banner"]'
 
+# Clear built-in exclude selectors while keeping user-provided --exclude-tags
+firecrawl scrape --output page --url "https://www.example.com" --empty-tags --exclude-tags ".nav"
+
 # Selectors that contain commas must use a JSON string array
 firecrawl scrape --output page --url "https://www.example.com" --include-tags '["article:has(h1, h2)",".content"]'
 ```
@@ -243,6 +247,7 @@ Scrape command parameters:
 - `--url` (required): Target webpage URL.
 - `--include-tags` (optional): CSS selectors to include. Accepts a single selector, comma-separated selector string, or JSON string array.
 - `--exclude-tags` (optional): Additional CSS selectors to exclude. Accepts a single selector, comma-separated selector string, or JSON string array.
+- `--empty-tags` (optional): Clear the built-in exclude selector list for this request while keeping user-provided `--exclude-tags`.
 - `--start-index` (optional): Markdown truncation start index. Must be `>= 0`. Default is `0`.
 - `--max-characters` (optional): Maximum markdown characters from `--start-index`. Must be `> 0` when provided.
 - `--headers` (optional): JSON object with string values, for example `{"Authorization":"Bearer token","X-Trace-Id":"abc123"}`.

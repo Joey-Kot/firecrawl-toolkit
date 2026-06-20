@@ -167,6 +167,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	var targetURL string
 	var includeTags string
 	var excludeTags string
+	var emptyTags bool
 	startIndex := 0
 	var maxCharacters int
 	var headersRaw string
@@ -174,6 +175,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.StringVar(&targetURL, "url", "", "Target webpage URL. Required.")
 	fs.StringVar(&includeTags, "include-tags", "", "CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.StringVar(&excludeTags, "exclude-tags", "", "Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.")
+	fs.BoolVar(&emptyTags, "empty-tags", false, "Clear the built-in exclude selector list while keeping user-provided --exclude-tags.")
 	fs.IntVar(&startIndex, "start-index", 0, "Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.")
 	fs.IntVar(&maxCharacters, "max-characters", 0, "Maximum markdown characters from start-index. Optional. Must be > 0 when provided.")
 	fs.StringVar(&headersRaw, "headers", "", `Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.`)
@@ -217,7 +219,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		return cliError{message: "--exclude-tags " + err.Error(), code: 2}
 	}
 
-	payload := buildScrapePayload(targetURL, include, exclude, headers)
+	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers)
 	raw, err := firecrawlPost("scrape", payload)
 	if err != nil {
 		fmt.Fprintln(stdout, "false")
@@ -315,8 +317,12 @@ func buildSearchPayload(query string, country string, limit int, sourceNames []s
 	}
 }
 
-func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, headers map[string]string) map[string]any {
-	resolvedExclude := stableUnique(append(defaultScrapeExcludeTags(), excludeTags...))
+func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, emptyTags bool, headers map[string]string) map[string]any {
+	baseExcludeTags := defaultScrapeExcludeTags()
+	if emptyTags {
+		baseExcludeTags = nil
+	}
+	resolvedExclude := stableUnique(append(baseExcludeTags, excludeTags...))
 	payload := map[string]any{
 		"url":                 targetURL,
 		"formats":             []string{"markdown"},
@@ -764,7 +770,7 @@ func printRootUsage(w io.Writer) {
   firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
   firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
   firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
-  firecrawl scrape     --output <name> --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
+  firecrawl scrape     --output <name> --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
   firecrawl credit-usage [--json] [--pretty]
 
 The API key is read from FIRECRAWL_KEY.
@@ -790,13 +796,14 @@ Output:
 
 func printScrapeUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scrape --output <name> --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
+  firecrawl scrape --output <name> --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
 
 Parameters:
   --output          Export name. Required. The result is saved as <output>.md in the current directory.
   --url             Target webpage URL. Required.
   --include-tags    CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.
   --exclude-tags    Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.
+  --empty-tags      Clear the built-in exclude selector list while keeping user-provided --exclude-tags.
   --start-index     Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.
   --max-characters  Maximum markdown characters from start-index. Optional. Must be > 0 when provided.
   --headers         Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.
