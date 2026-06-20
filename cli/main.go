@@ -172,8 +172,8 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	var headersRaw string
 	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md in the current directory.")
 	fs.StringVar(&targetURL, "url", "", "Target webpage URL. Required.")
-	fs.StringVar(&includeTags, "include-tags", "", "CSS selectors to include. Optional. Comma-separated string or JSON string array.")
-	fs.StringVar(&excludeTags, "exclude-tags", "", "Additional CSS selectors to exclude. Optional. Comma-separated string or JSON string array.")
+	fs.StringVar(&includeTags, "include-tags", "", "CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.")
+	fs.StringVar(&excludeTags, "exclude-tags", "", "Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.IntVar(&startIndex, "start-index", 0, "Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.")
 	fs.IntVar(&maxCharacters, "max-characters", 0, "Maximum markdown characters from start-index. Optional. Must be > 0 when provided.")
 	fs.StringVar(&headersRaw, "headers", "", `Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.`)
@@ -795,11 +795,26 @@ func printScrapeUsage(w io.Writer) {
 Parameters:
   --output          Export name. Required. The result is saved as <output>.md in the current directory.
   --url             Target webpage URL. Required.
-  --include-tags    CSS selectors to include. Optional. Comma-separated string or JSON string array.
-  --exclude-tags    Additional CSS selectors to exclude. Optional. Comma-separated string or JSON string array.
+  --include-tags    CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.
+  --exclude-tags    Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.
   --start-index     Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.
   --max-characters  Maximum markdown characters from start-index. Optional. Must be > 0 when provided.
   --headers         Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.
+
+Input examples:
+  --include-tags "article"
+  --exclude-tags ".nav,.footer,#sidebar"
+  --include-tags '["main article",".post-content","#content"]'
+
+Common CSS selector examples:
+  --include-tags '["article",".content","#main"]'
+  --include-tags '["[data-testid=\"article-body\"]","[class*=\"content\"]","[id^=\"post-\"]"]'
+  --include-tags '["main article","main > article","article.post"]'
+  --exclude-tags '["nav[aria-label=\"Breadcrumb\"]","aside.related",".promo-banner"]'
+  --include-tags '["article:has(h1, h2)",".content"]'
+
+Notes:
+  Use a JSON string array when a selector itself contains commas, spaces, or quotes.
 
 Output:
   true on success. The markdown export is written only after a successful scrape.

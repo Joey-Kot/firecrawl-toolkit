@@ -205,12 +205,44 @@ firecrawl scrape \
   --headers '{"X-Trace-Id":"abc123"}'
 ```
 
+`--include-tags` and `--exclude-tags` accept these input forms:
+
+```bash
+# Single selector
+firecrawl scrape --output page --url "https://www.example.com" --include-tags "article"
+
+# Comma-separated selector list
+firecrawl scrape --output page --url "https://www.example.com" --exclude-tags ".nav,.footer,#sidebar"
+
+# JSON string array, recommended when selectors contain spaces, quotes, or commas
+firecrawl scrape --output page --url "https://www.example.com" --include-tags '["main article",".post-content","#content"]'
+```
+
+Common CSS selector types:
+
+```bash
+# Tag, class, and ID selectors
+firecrawl scrape --output page --url "https://www.example.com" --include-tags '["article",".content","#main"]'
+
+# Attribute selectors with square brackets
+firecrawl scrape --output page --url "https://www.example.com" --include-tags '["[data-testid=\"article-body\"]","[class*=\"content\"]","[id^=\"post-\"]"]'
+
+# Descendant, child, and compound selectors
+firecrawl scrape --output page --url "https://www.example.com" --include-tags '["main article","main > article","article.post"]'
+
+# Exclusion selectors
+firecrawl scrape --output page --url "https://www.example.com" --exclude-tags '["nav[aria-label=\"Breadcrumb\"]","aside.related",".promo-banner"]'
+
+# Selectors that contain commas must use a JSON string array
+firecrawl scrape --output page --url "https://www.example.com" --include-tags '["article:has(h1, h2)",".content"]'
+```
+
 Scrape command parameters:
 
 - `--output` (required): Export name. The CLI writes `<output>.md` in the current directory.
 - `--url` (required): Target webpage URL.
-- `--include-tags` (optional): CSS selectors to include. Accepts a comma-separated string or JSON string array.
-- `--exclude-tags` (optional): Additional CSS selectors to exclude. Accepts a comma-separated string or JSON string array.
+- `--include-tags` (optional): CSS selectors to include. Accepts a single selector, comma-separated selector string, or JSON string array.
+- `--exclude-tags` (optional): Additional CSS selectors to exclude. Accepts a single selector, comma-separated selector string, or JSON string array.
 - `--start-index` (optional): Markdown truncation start index. Must be `>= 0`. Default is `0`.
 - `--max-characters` (optional): Maximum markdown characters from `--start-index`. Must be `> 0` when provided.
 - `--headers` (optional): JSON object with string values, for example `{"Authorization":"Bearer token","X-Trace-Id":"abc123"}`.
