@@ -129,7 +129,7 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		if headers["X-Trace-Id"] != "abc123" {
 			t.Fatalf("headers = %#v", headers)
 		}
-		return jsonResponse(200, `{"success":true,"data":{"markdown":"hello%20world%21\nnext\\nline","metadata":{"title":"T","description":"D","language":"en","creditsUsed":2}}}`), nil
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"hello%20world%21\nnext\\nline","metadata":{"title":"T","description":"D","url":"https://canonical.example/page","language":"en","creditsUsed":2}}}`), nil
 	})
 
 	old := endpoints["scrape"]
@@ -172,6 +172,7 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 	for _, want := range []string{
 		"## title: T",
 		"## description: D",
+		"## url: https://canonical.example/page",
 		"## language: en",
 		"## creditsUsed: 2",
 		"world!\nnext",

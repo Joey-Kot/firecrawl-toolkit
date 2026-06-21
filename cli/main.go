@@ -238,7 +238,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		return cliError{code: 1}
 	}
 
-	result := transformScrapeResult(raw, data)
+	result := transformScrapeResult(raw, data, targetURL)
 	if maxCharacters > 0 {
 		if markdown, ok := result["markdown"].(string); ok {
 			result["markdown"] = truncateRunes(markdown, startIndex, maxCharacters)
@@ -429,7 +429,7 @@ func transformSearchResult(raw map[string]any, data map[string]any) map[string]a
 	}
 }
 
-func transformScrapeResult(raw map[string]any, data map[string]any) map[string]any {
+func transformScrapeResult(raw map[string]any, data map[string]any, targetURL string) map[string]any {
 	metadata, _ := data["metadata"].(map[string]any)
 	markdown, _ := data["markdown"].(string)
 	decodedMarkdown := markdown
@@ -443,10 +443,20 @@ func transformScrapeResult(raw map[string]any, data map[string]any) map[string]a
 		"proxyUsed":   valueOrNil(metadata, "proxyUsed"),
 		"title":       valueOrNil(metadata, "title"),
 		"description": valueOrNil(metadata, "description"),
+		"url":         scrapeURL(metadata, targetURL),
 		"language":    valueOrNil(metadata, "language"),
 		"markdown":    decodedMarkdown,
 		"creditsUsed": valueOrNil(metadata, "creditsUsed"),
 	}
+}
+
+func scrapeURL(metadata map[string]any, targetURL string) string {
+	for _, key := range []string{"url", "sourceURL", "ogUrl"} {
+		if val, ok := valueOrNil(metadata, key).(string); ok && strings.TrimSpace(val) != "" {
+			return val
+		}
+	}
+	return targetURL
 }
 
 func mapItems(items any, fields []string) []map[string]any {
@@ -501,9 +511,10 @@ func formatJSON(payload any, pretty bool) string {
 }
 
 func renderMarkdownFile(result map[string]any) string {
-	return fmt.Sprintf("## title: %s\n## description: %s\n## language: %s\n## creditsUsed: %s\n\n---\n\n%s\n",
+	return fmt.Sprintf("## title: %s\n## description: %s\n## url: %s\n## language: %s\n## creditsUsed: %s\n\n---\n\n%s\n",
 		stringValue(result["title"]),
 		stringValue(result["description"]),
+		stringValue(result["url"]),
 		stringValue(result["language"]),
 		stringValue(result["creditsUsed"]),
 		stringValue(result["markdown"]),
