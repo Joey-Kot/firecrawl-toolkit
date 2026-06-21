@@ -9,11 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSearchCommandOutputsCompactMappedJSON(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, defaultTimeoutSecs)
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 			t.Fatalf("Authorization header = %q", got)
 		}
@@ -26,6 +28,13 @@ func TestSearchCommandOutputsCompactMappedJSON(t *testing.T) {
 		}
 		if payload["tbs"] != "qdr:m" {
 			t.Fatalf("tbs = %v", payload["tbs"])
+		}
+		if payload["timeout"] != float64(120000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
+		}
+		scrapeOptions := payload["scrapeOptions"].(map[string]any)
+		if scrapeOptions["timeout"] != float64(120000) {
+			t.Fatalf("scrapeOptions.timeout = %#v", scrapeOptions["timeout"])
 		}
 		return jsonResponse(200, `{"success":true,"data":{"web":[{"title":"w","description":"d","url":"u","extra":1}],"news":[{"title":"n","url":"nu","date":"today"}],"images":[{"title":"i","imageUrl":"iu","url":"ru"}]},"creditsUsed":3}`), nil
 	})
@@ -107,9 +116,13 @@ func TestCreditUsageCommandOutputsJSON(t *testing.T) {
 func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, 7)
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
+		}
+		if payload["timeout"] != float64(7000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
 		}
 		if _, ok := payload["startIndex"]; ok {
 			t.Fatal("startIndex must not be forwarded upstream")
@@ -157,6 +170,7 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		"--start-index", "6",
 		"--max-characters", "12",
 		"--headers", `{"X-Trace-Id":"abc123"}`,
+		"--timeout", "7",
 	}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
@@ -268,19 +282,22 @@ func TestScrapeCommandCreatesPathBeforeRequest(t *testing.T) {
 }
 
 func TestBuildScrapePayloadEmptyTags(t *testing.T) {
-	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil)
+	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil, defaultTimeoutSecs)
 	excludeTags := payload["excludeTags"].([]string)
 	if strings.Join(excludeTags, ",") != ".nav,script" {
 		t.Fatalf("excludeTags = %#v", excludeTags)
 	}
+	if payload["timeout"] != int64(120000) {
+		t.Fatalf("timeout = %#v", payload["timeout"])
+	}
 
-	payload = buildScrapePayload("https://example.com", nil, nil, true, nil)
+	payload = buildScrapePayload("https://example.com", nil, nil, true, nil, defaultTimeoutSecs)
 	excludeTags = payload["excludeTags"].([]string)
 	if len(excludeTags) != 0 {
 		t.Fatalf("excludeTags = %#v", excludeTags)
 	}
 
-	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil)
+	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil, defaultTimeoutSecs)
 	excludeTags = payload["excludeTags"].([]string)
 	if !containsString(excludeTags, "script") || !containsString(excludeTags, ".nav") {
 		t.Fatalf("excludeTags should include built-in and user selectors, got %#v", excludeTags)
@@ -348,6 +365,13 @@ func TestValidation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "--max-characters") {
 		t.Fatalf("expected max-characters validation error, got %v", err)
 	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err = run([]string{"web", "--query", "ai", "--timeout", "0"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--timeout") {
+		t.Fatalf("expected timeout validation error, got %v", err)
+	}
 }
 
 func TestCountryAliases(t *testing.T) {
@@ -388,6 +412,18 @@ func jsonResponse(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func assertRequestTimeout(t *testing.T, r *http.Request, wantSeconds int) {
+	t.Helper()
+	deadline, ok := r.Context().Deadline()
+	if !ok {
+		t.Fatal("request context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > time.Duration(wantSeconds)*time.Second {
+		t.Fatalf("request timeout = %s, want <= %ds and > 0", remaining, wantSeconds)
 	}
 }
 

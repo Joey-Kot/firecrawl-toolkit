@@ -151,7 +151,7 @@ CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o di
 Search commands:
 
 ```bash
-firecrawl aggregated --query "AI advancements 2024" --country "United States" --search-num 5 --search-time month
+firecrawl aggregated --query "AI advancements 2024" --country "United States" --search-num 5 --search-time month --timeout 120
 firecrawl web --query "AI advancements 2024" --country US --search-num 5
 firecrawl news --query "OpenAI news" --search-time week
 firecrawl image --query "firecrawl logo" --search-num 10
@@ -163,6 +163,7 @@ Search command parameters:
 - `--country` (optional): Country or region name / ISO code. Default is `US`.
 - `--search-num` (optional): Number of results, range `1`-`100`. Default is `20`.
 - `--search-time` (optional): One of `hour`, `day`, `week`, `month`, `year`.
+- `--timeout` (optional): Request timeout in seconds. Must be `> 0`. Default is `120`.
 
 Search commands output compact single-line JSON, using the same mapped fields as the Python search tools:
 
@@ -203,7 +204,8 @@ firecrawl scrape \
   --empty-tags \
   --start-index 0 \
   --max-characters 1200 \
-  --headers '{"X-Trace-Id":"abc123"}'
+  --headers '{"X-Trace-Id":"abc123"}' \
+  --timeout 120
 ```
 
 Save the markdown export to a specific directory:
@@ -261,6 +263,7 @@ Scrape command parameters:
 - `--start-index` (optional): Markdown truncation start index. Must be `>= 0`. Default is `0`.
 - `--max-characters` (optional): Maximum markdown characters from `--start-index`. Must be `> 0` when provided.
 - `--headers` (optional): JSON object with string values, for example `{"Authorization":"Bearer token","X-Trace-Id":"abc123"}`.
+- `--timeout` (optional): Request timeout in seconds. Must be `> 0`. Default is `120`.
 
 Scrape output:
 

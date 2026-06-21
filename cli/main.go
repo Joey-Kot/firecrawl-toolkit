@@ -23,6 +23,8 @@ const (
 	searchEndpoint      = "https://api.firecrawl.dev/v2/search"
 	scrapeEndpoint      = "https://api.firecrawl.dev/v2/scrape"
 	creditUsageEndpoint = "https://api.firecrawl.dev/v2/team/credit-usage"
+	defaultTimeoutSecs  = 120
+	maxTimeoutSecs      = 9223372036
 )
 
 //go:embed data/country_aliases.json
@@ -96,10 +98,12 @@ func runSearch(name string, sources []string, args []string, stdout io.Writer, s
 	var country string
 	searchNum := 20
 	var searchTime string
+	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&query, "query", "", "Search keywords. Required.")
 	fs.StringVar(&country, "country", "", "Country or region name/ISO code. Optional. Default is US.")
 	fs.IntVar(&searchNum, "search-num", 20, "Number of results to return. Optional. Range: 1-100. Default is 20.")
 	fs.StringVar(&searchTime, "search-time", "", `Time filter. Optional. One of: "hour", "day", "week", "month", "year".`)
+	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printSearchUsage(stderr, name) }
 	if err := fs.Parse(args); err != nil {
 		return cliError{code: 2}
@@ -114,17 +118,20 @@ func runSearch(name string, sources []string, args []string, stdout io.Writer, s
 	if searchNum < 1 || searchNum > 100 {
 		return cliError{message: "--search-num must be an integer from 1 to 100", code: 2}
 	}
+	if err := validateTimeoutSecs(timeoutSecs); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
 	tbs, err := mapSearchTime(searchTime)
 	if err != nil {
 		return cliError{message: err.Error(), code: 2}
 	}
 
-	payload := buildSearchPayload(query, country, searchNum, sources)
+	payload := buildSearchPayload(query, country, searchNum, sources, timeoutSecs)
 	if tbs != "" {
 		payload["tbs"] = tbs
 	}
 
-	raw, err := firecrawlPost("search", payload)
+	raw, err := firecrawlPost("search", payload, timeoutSecs)
 	if err != nil {
 		out := compactJSON(map[string]any{
 			"success": false,
@@ -172,6 +179,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	startIndex := 0
 	var maxCharacters int
 	var headersRaw string
+	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md.")
 	fs.StringVar(&outputDir, "path", "", "Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.")
 	fs.StringVar(&targetURL, "url", "", "Target webpage URL. Required.")
@@ -181,6 +189,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.IntVar(&startIndex, "start-index", 0, "Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.")
 	fs.IntVar(&maxCharacters, "max-characters", 0, "Maximum markdown characters from start-index. Optional. Must be > 0 when provided.")
 	fs.StringVar(&headersRaw, "headers", "", `Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.`)
+	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printScrapeUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		return cliError{code: 2}
@@ -208,6 +217,9 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	if maxCharactersProvided && maxCharacters <= 0 {
 		return cliError{message: "--max-characters must be greater than 0 when provided", code: 2}
 	}
+	if err := validateTimeoutSecs(timeoutSecs); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
 	headers, err := parseHeaders(headersRaw)
 	if err != nil {
 		return cliError{message: err.Error(), code: 2}
@@ -224,8 +236,8 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		return cliError{message: err.Error(), code: 1}
 	}
 
-	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers)
-	raw, err := firecrawlPost("scrape", payload)
+	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers, timeoutSecs)
+	raw, err := firecrawlPost("scrape", payload, timeoutSecs)
 	if err != nil {
 		fmt.Fprintln(stdout, "false")
 		fmt.Fprintln(stdout, err.Error())
@@ -289,18 +301,19 @@ func runCreditUsage(args []string, stdout io.Writer, stderr io.Writer) error {
 	return nil
 }
 
-func buildSearchPayload(query string, country string, limit int, sourceNames []string) map[string]any {
+func buildSearchPayload(query string, country string, limit int, sourceNames []string, timeoutSecs int) map[string]any {
 	countryCode := getCountryCodeAlpha2(country)
 	sources := make([]map[string]string, 0, len(sourceNames))
 	for _, source := range sourceNames {
 		sources = append(sources, map[string]string{"type": source})
 	}
+	timeoutMillis := timeoutMilliseconds(timeoutSecs)
 	return map[string]any{
 		"query":             query,
 		"limit":             limit,
 		"sources":           sources,
 		"country":           countryCode,
-		"timeout":           60000,
+		"timeout":           timeoutMillis,
 		"ignoreInvalidURLs": false,
 		"scrapeOptions": map[string]any{
 			"formats":             []string{},
@@ -309,7 +322,7 @@ func buildSearchPayload(query string, country string, limit int, sourceNames []s
 			"waitFor":             0,
 			"mobile":              false,
 			"skipTlsVerification": false,
-			"timeout":             30000,
+			"timeout":             timeoutMillis,
 			"parsers":             []string{},
 			"location": map[string]string{
 				"country": countryCode,
@@ -322,12 +335,13 @@ func buildSearchPayload(query string, country string, limit int, sourceNames []s
 	}
 }
 
-func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, emptyTags bool, headers map[string]string) map[string]any {
+func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, emptyTags bool, headers map[string]string, timeoutSecs int) map[string]any {
 	baseExcludeTags := defaultScrapeExcludeTags()
 	if emptyTags {
 		baseExcludeTags = nil
 	}
 	resolvedExclude := stableUnique(append(baseExcludeTags, excludeTags...))
+	timeoutMillis := timeoutMilliseconds(timeoutSecs)
 	payload := map[string]any{
 		"url":                 targetURL,
 		"formats":             []string{"markdown"},
@@ -337,7 +351,7 @@ func buildScrapePayload(targetURL string, includeTags []string, excludeTags []st
 		"waitFor":             0,
 		"mobile":              false,
 		"skipTlsVerification": true,
-		"timeout":             30000,
+		"timeout":             timeoutMillis,
 		"parsers":             []string{"pdf"},
 		"removeBase64Images":  true,
 		"blockAds":            true,
@@ -373,7 +387,7 @@ func firecrawlGet(endpointName string) (map[string]any, error) {
 	return parseFirecrawlResponse(endpointName, resp)
 }
 
-func firecrawlPost(endpointName string, payload map[string]any) (map[string]any, error) {
+func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int) (map[string]any, error) {
 	key := strings.TrimSpace(os.Getenv(apiKeyEnv))
 	if key == "" {
 		return nil, fmt.Errorf("%s is required", apiKeyEnv)
@@ -390,12 +404,37 @@ func firecrawlPost(endpointName string, payload map[string]any) (map[string]any,
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
-	resp, err := httpClient.Do(req)
+	client := clientWithTimeout(timeoutSecs)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	return parseFirecrawlResponse(endpointName, resp)
+}
+
+func validateTimeoutSecs(timeoutSecs int) error {
+	if timeoutSecs <= 0 {
+		return fmt.Errorf("--timeout must be an integer greater than 0")
+	}
+	if int64(timeoutSecs) > maxTimeoutSecs {
+		return fmt.Errorf("--timeout is too large")
+	}
+	return nil
+}
+
+func timeoutDuration(timeoutSecs int) time.Duration {
+	return time.Duration(timeoutSecs) * time.Second
+}
+
+func timeoutMilliseconds(timeoutSecs int) int64 {
+	return int64(timeoutSecs) * 1000
+}
+
+func clientWithTimeout(timeoutSecs int) *http.Client {
+	client := *httpClient
+	client.Timeout = timeoutDuration(timeoutSecs)
+	return &client
 }
 
 func parseFirecrawlResponse(endpointName string, resp *http.Response) (map[string]any, error) {
@@ -797,11 +836,11 @@ func defaultScrapeExcludeTags() []string {
 
 func printRootUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl aggregated --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
-  firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
-  firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
-  firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
-  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
+  firecrawl aggregated --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
+  firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
+  firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
+  firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
+  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>] [--timeout <seconds>]
   firecrawl credit-usage [--json] [--pretty]
 
 The API key is read from FIRECRAWL_KEY.
@@ -811,13 +850,14 @@ The API key is read from FIRECRAWL_KEY.
 
 func printSearchUsage(w io.Writer, name string) {
 	fmt.Fprintf(w, `Usage:
-  firecrawl %s --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
+  firecrawl %s --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
 
 Parameters:
   --query        Search keywords. Required.
   --country      Country or region for search results. Optional. Supports names and ISO codes. Default is US.
   --search-num   Number of results to return. Optional. Legal range: 1-100. Default is 20.
   --search-time  Time filter. Optional. One of: "hour", "day", "week", "month", "year".
+  --timeout      Request timeout in seconds. Optional. Must be > 0. Default is 120.
 
 Output:
   Compact single-line JSON with success, data.web, data.news, data.images, and creditsUsed.
@@ -827,7 +867,7 @@ Output:
 
 func printScrapeUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
+  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>] [--timeout <seconds>]
 
 Parameters:
   --output          Export name. Required. The result is saved as <output>.md.
@@ -839,6 +879,7 @@ Parameters:
   --start-index     Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.
   --max-characters  Maximum markdown characters from start-index. Optional. Must be > 0 when provided.
   --headers         Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.
+  --timeout         Request timeout in seconds. Optional. Must be > 0. Default is 120.
 
 Input examples:
   --include-tags "article"
