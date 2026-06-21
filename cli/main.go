@@ -164,6 +164,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs := flag.NewFlagSet("scrape", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var output string
+	var outputDir string
 	var targetURL string
 	var includeTags string
 	var excludeTags string
@@ -171,7 +172,8 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	startIndex := 0
 	var maxCharacters int
 	var headersRaw string
-	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md in the current directory.")
+	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md.")
+	fs.StringVar(&outputDir, "path", "", "Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.")
 	fs.StringVar(&targetURL, "url", "", "Target webpage URL. Required.")
 	fs.StringVar(&includeTags, "include-tags", "", "CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.StringVar(&excludeTags, "exclude-tags", "", "Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.")
@@ -218,6 +220,9 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err != nil {
 		return cliError{message: "--exclude-tags " + err.Error(), code: 2}
 	}
+	if err := ensureOutputDir(outputDir); err != nil {
+		return cliError{message: err.Error(), code: 1}
+	}
 
 	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers)
 	raw, err := firecrawlPost("scrape", payload)
@@ -245,7 +250,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		}
 	}
 
-	path := outputPath(output)
+	path := outputPath(output, outputDir)
 	if err := os.WriteFile(path, []byte(renderMarkdownFile(result)), 0o644); err != nil {
 		fmt.Fprintln(stdout, "false")
 		fmt.Fprintln(stdout, err.Error())
@@ -533,12 +538,27 @@ func stringValue(value any) string {
 	}
 }
 
-func outputPath(output string) string {
+func outputPath(output string, outputDir string) string {
 	name := filepath.Base(strings.TrimSpace(output))
 	if !strings.HasSuffix(strings.ToLower(name), ".md") {
 		name += ".md"
 	}
-	return filepath.Join(".", name)
+	dir := strings.TrimSpace(outputDir)
+	if dir == "" {
+		dir = "."
+	}
+	return filepath.Join(dir, name)
+}
+
+func ensureOutputDir(outputDir string) error {
+	dir := strings.TrimSpace(outputDir)
+	if dir == "" {
+		dir = "."
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create output path %q: %w", dir, err)
+	}
+	return nil
 }
 
 func parseHeaders(raw string) (map[string]string, error) {
@@ -781,7 +801,7 @@ func printRootUsage(w io.Writer) {
   firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
   firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
   firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>]
-  firecrawl scrape     --output <name> --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
+  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
   firecrawl credit-usage [--json] [--pretty]
 
 The API key is read from FIRECRAWL_KEY.
@@ -807,10 +827,11 @@ Output:
 
 func printScrapeUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scrape --output <name> --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
+  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>]
 
 Parameters:
-  --output          Export name. Required. The result is saved as <output>.md in the current directory.
+  --output          Export name. Required. The result is saved as <output>.md.
+  --path            Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.
   --url             Target webpage URL. Required.
   --include-tags    CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.
   --exclude-tags    Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.
@@ -835,7 +856,7 @@ Notes:
   Use a JSON string array when a selector itself contains commas, spaces, or quotes.
 
 Output:
-  true on success. The markdown export is written only after a successful scrape.
+  true on success. The output directory is created before scraping, and the markdown export is written only after a successful scrape.
   false followed by an error reason on failure. Existing files are not created or overwritten on failure.
 
 `)

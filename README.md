@@ -206,6 +206,15 @@ firecrawl scrape \
   --headers '{"X-Trace-Id":"abc123"}'
 ```
 
+Save the markdown export to a specific directory:
+
+```bash
+firecrawl scrape \
+  --output example \
+  --path ./exports/pages \
+  --url "https://www.example.com"
+```
+
 `--include-tags` and `--exclude-tags` accept these input forms:
 
 ```bash
@@ -243,7 +252,8 @@ firecrawl scrape --output page --url "https://www.example.com" --include-tags '[
 
 Scrape command parameters:
 
-- `--output` (required): Export name. The CLI writes `<output>.md` in the current directory.
+- `--output` (required): Export name. The CLI writes `<output>.md`.
+- `--path` (optional): Directory where the markdown export is saved. Supports absolute and relative paths. Defaults to the current directory. If the directory does not exist, the CLI tries to create it before scraping.
 - `--url` (required): Target webpage URL.
 - `--include-tags` (optional): CSS selectors to include. Accepts a single selector, comma-separated selector string, or JSON string array.
 - `--exclude-tags` (optional): Additional CSS selectors to exclude. Accepts a single selector, comma-separated selector string, or JSON string array.
@@ -254,7 +264,7 @@ Scrape command parameters:
 
 Scrape output:
 
-- On success, stdout is `true`, and the CLI writes `<output>.md`.
+- On success, stdout is `true`, and the CLI writes `<output>.md` under `--path` or the current directory.
 - On failure, stdout is `false` followed by the error reason, and no file is created or overwritten.
 
 The generated markdown file uses this structure:

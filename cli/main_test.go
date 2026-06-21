@@ -183,6 +183,90 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 	}
 }
 
+func TestScrapeCommandWritesMarkdownFileToPath(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"hello","metadata":{"title":"T","url":"https://example.com","creditsUsed":1}}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	dir := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{
+		"scrape",
+		"--output", "page",
+		"--path", filepath.Join("exports", "pages"),
+		"--url", "https://example.com",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "true" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "exports", "pages")); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "exports", "pages", "page.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "hello") {
+		t.Fatalf("export content = %q", string(content))
+	}
+}
+
+func TestScrapeCommandCreatesPathBeforeRequest(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	called := false
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		called = true
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"hello","metadata":{}}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	dir := t.TempDir()
+	blockedPath := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blockedPath, []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"scrape",
+		"--output", "page",
+		"--path", blockedPath,
+		"--url", "https://example.com",
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected path creation failure")
+	}
+	if called {
+		t.Fatal("scrape request was called before output path was created")
+	}
+	if !strings.Contains(err.Error(), "failed to create output path") {
+		t.Fatalf("error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestBuildScrapePayloadEmptyTags(t *testing.T) {
 	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil)
 	excludeTags := payload["excludeTags"].([]string)
