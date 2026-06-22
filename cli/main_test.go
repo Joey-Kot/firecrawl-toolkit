@@ -113,6 +113,21 @@ func TestCreditUsageCommandOutputsJSON(t *testing.T) {
 	}
 }
 
+func TestEndpointURLUsesConfiguredBaseURL(t *testing.T) {
+	t.Setenv(baseURLEnv, "https://self-hosted.example/api/v2/")
+
+	cases := map[string]string{
+		"search":       "https://self-hosted.example/api/v2/search",
+		"scrape":       "https://self-hosted.example/api/v2/scrape",
+		"credit-usage": "https://self-hosted.example/api/v2/team/credit-usage",
+	}
+	for endpointName, want := range cases {
+		if got := endpointURL(endpointName); got != want {
+			t.Fatalf("endpointURL(%q) = %q, want %q", endpointName, got, want)
+		}
+	}
+}
+
 func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
@@ -167,8 +182,6 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		"--include-tags", `["article",".content"]`,
 		"--exclude-tags", ".nav",
 		"--empty-tags",
-		"--start-index", "6",
-		"--max-characters", "12",
 		"--headers", `{"X-Trace-Id":"abc123"}`,
 		"--timeout", "7",
 	}, &stdout, &stderr)
@@ -189,7 +202,7 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		"## url: https://canonical.example/page",
 		"## language: en",
 		"## creditsUsed: 2",
-		"world!\nnext",
+		"hello world!\nnext\nline",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("export content missing %q:\n%s", want, text)
@@ -361,9 +374,18 @@ func TestValidation(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	err = run([]string{"scrape", "--output", "x", "--url", "https://example.com", "--max-characters", "0"}, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "--max-characters") {
-		t.Fatalf("expected max-characters validation error, got %v", err)
+	run([]string{"scrape", "--help"}, &stdout, &stderr)
+	if strings.Contains(stderr.String(), "start-index") || strings.Contains(stderr.String(), "max-characters") {
+		t.Fatalf("scrape usage should not mention removed truncation flags:\n%s", stderr.String())
+	}
+
+	for _, removedFlag := range []string{"--start-index", "--max-characters"} {
+		stdout.Reset()
+		stderr.Reset()
+		err = run([]string{"scrape", "--output", "x", "--url", "https://example.com", removedFlag, "1"}, &stdout, &stderr)
+		if err == nil || !strings.Contains(stderr.String(), "flag provided but not defined") {
+			t.Fatalf("expected %s to be rejected as an unknown flag, err=%v stderr=%s", removedFlag, err, stderr.String())
+		}
 	}
 
 	stdout.Reset()

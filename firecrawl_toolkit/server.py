@@ -161,11 +161,23 @@ except Exception as e:
     logger.warning("加载国家别名字典失败: %s", e)
 
 USER_AGENT = "firecrawl_client/1.0"
-API_ENDPOINTS = {
-    "search": "https://api.firecrawl.dev/v2/search",
-    "scrape": "https://api.firecrawl.dev/v2/scrape",
-
+DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v2"
+FIRECRAWL_BASE_URL = os.getenv("FIRECRAWL_BASE_URL", DEFAULT_FIRECRAWL_BASE_URL).strip() or DEFAULT_FIRECRAWL_BASE_URL
+API_ENDPOINT_PATHS = {
+    "search": "search",
+    "scrape": "scrape",
 }
+
+
+def _build_api_endpoints(base_url: str) -> Dict[str, str]:
+    normalized_base = (base_url or DEFAULT_FIRECRAWL_BASE_URL).strip().rstrip("/")
+    return {
+        name: f"{normalized_base}/{path}"
+        for name, path in API_ENDPOINT_PATHS.items()
+    }
+
+
+API_ENDPOINTS = _build_api_endpoints(FIRECRAWL_BASE_URL)
 HTTP_TIMEOUT = 30.0
 DEFAULT_SCRAPE_EXCLUDE_TAGS: List[str] = [
     "script",

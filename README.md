@@ -1,276 +1,66 @@
-# Firecrawl MCP Toolkit
+# Firecrawl Toolkit
 
-A high-performance, asynchronous MCP server that provides comprehensive Google search and web content scraping capabilities through the Firecrawl API (excluding some rarely used interfaces).
+**Turn web pages and PDFs into local, searchable Markdown for agents.**
 
-This project is built on `httpx`, utilizing asynchronous clients and connection pool management to offer LLMs a stable and efficient external information retrieval tool.
+Firecrawl Toolkit is a CLI-first web capture tool built on top of the Firecrawl API. It is designed for shell-based agents such as Codex, Claude Code, OpenCode, and other local automation workflows.
 
-## PyPI Package
-
-firecrawl-toolkit: https://pypi.org/project/firecrawl-toolkit/
-
-## Key Features
-
-- **Asynchronous Architecture**: Fully based on `asyncio` and `httpx`, ensuring high throughput and non-blocking I/O operations.
-- **HTTP Connection Pool**: Manages and reuses TCP connections through a global `httpx.AsyncClient` instance, significantly improving performance under high concurrency.
-- **Concurrency Control**: Built-in global and per-API endpoint concurrency semaphores effectively manage API request rates to prevent exceeding rate limits.
-- **Automatic Retry Mechanism**: Integrated request retry functionality with exponential backoff strategy automatically handles temporary network fluctuations or server errors, enhancing service stability.
-- **Intelligent Country Code Parsing**: Includes a comprehensive country name dictionary supporting inputs in Chinese, English, ISO Alpha-2/3, and other formats, with automatic normalization.
-- **Response Field Mapping**: Search/Scrape responses are normalized into minimal, client-facing JSON schemas instead of upstream passthrough payloads.
-- **Noise Reduction for Scrape**: Built-in `excludeTags` selector filtering removes common non-content blocks (navigation, ads, sidebars, comments, etc.) to improve signal quality. Supports returning a specified Markdown character window with `startIndex` and `maxCharacters`.
-- **Flexible Environment Variable Configuration**: Supports fine-tuned service configuration via environment variables.
-- **The Search and Scrape Endpoints perform some request pre-processing and post-processing, which can save quite a few tokens.**
-
-## Available Tools
-
-This service provides the following tools:
-
-| Tool Name                | Description                                  |
-| ------------------------ | -------------------------------------------- |
-| `firecrawl-aggregated-search`  | Aggregated Search Interface, Combining Webpage, News, And Image Search Results.          |
-| `firecrawl-web-search`          | Web Search Interface. |
-| `firecrawl-news-search`          | News Search Interface. |
-| `firecrawl-image-search`          | Image Search Interface. |
-| `firecrawl-scrape`          | Scrapes and returns the content of a specified URL. |
-
-## Installation Guide
-
-It is recommended to install using `pip` or `uv`.
+Instead of dumping long web pages into model context, the CLI saves the page as a local Markdown file and prints only a minimal success/failure signal to stdout.
 
 ```bash
-# Using pip
-pip install firecrawl-toolkit
-
-# Or using uv
-uv pip install firecrawl-toolkit
+firecrawl scrape --url "https://example.com/article" --output article --path ./Temp-Scrape
+# true
 ```
 
-## Quick Start
-
-### Set Environment Variables
-
-Create a `.env` file in the project root directory and enter your Firecrawl API key:
-
-| Environment Variables | Default value | Description |
-| :---: | :---: | :--- |
-| `FIRECRAWL_API_KEY` | fc-xxx | Your Firecrawl API key. Multiple keys can be separated by commas, and one will be selected randomly for each request. |
-| `FIRECRAWL_HTTP2` | 0 | Disable or enable HTTP2, <0/1> |
-| `FIRECRAWL_MAX_WORKERS` | 10 | Number of processes |
-| `FIRECRAWL_MAX_CONNECTIONS` | 200 | Maximum number of connections |
-| `FIRECRAWL_MAX_CONCURRENT_REQUESTS` | 200 | Maximum number of concurrent requests |
-| `FIRECRAWL_KEEPALIVE` | 20 | Maximum number of concurrent connections |
-| `FIRECRAWL_RETRY_COUNT` | 3 | Maximum number of retries |
-| `FIRECRAWL_RETRY_BASE_DELAY` | 0.5 | Base delay time for retries in seconds |
-| `FIRECRAWL_ENDPOINT_CONCURRENCY` | `{"search":10,"scrape":2}` | Set concurrency per endpoint (JSON format) |
-| `FIRECRAWL_ENDPOINT_RETRYABLE` | `{"scrape": false}` | Set retry allowance per endpoint (JSON format) |
-| `FIRECRAWL_MCP_ENABLE_STDIO` | 0 | Disable or enable STDIO, <0/1> |
-| `FIRECRAWL_MCP_ENABLE_HTTP` | 0 | Disable or enable HTTP, <0/1> |
-| `FIRECRAWL_MCP_ENABLE_SSE` | 0 | Disable or enable SSE, <0/1> |
-| `FIRECRAWL_MCP_HTTP_HOST` | 127.0.0.1 | HTTP host address |
-| `FIRECRAWL_MCP_HTTP_PORT` | 7001 | HTTP host port |
-| `FIRECRAWL_MCP_SSE_HOST` | 127.0.0.1 | SSE host address |
-| `FIRECRAWL_MCP_SSE_PORT` | 7001 | SSE host port |
-| `FIRECRAWL_MCP_LOCK_FILE` | `/tmp/firecrawl_mcp.lock` | Lock file path |
-
-- **STDIO, HTTP, and SSE can only be used one at a time.** If you need to use multiple protocols, please start separate services for each.
-- When using multiple services, please specify different lock files for each.
-
-### Configure MCP Client
-
-Add the following server configuration in the MCP client configuration file:
-
-```json
-{
-  "mcpServers": {
-    "firecrawl": {
-      "command": "python3",
-      "args": ["-m", "firecrawl-toolkit"],
-      "env": {
-        "FIRECRAWL_API_KEY": "<Your Firecrawl API key>"
-      }
-    }
-  }
-}
-```
-
-```json
-{
-  "mcpServers": {
-    "firecrawl": {
-      "command": "uvx",
-      "args": ["firecrawl-toolkit"],
-      "env": {
-        "FIRECRAWL_API_KEY": "<Your Firecrawl API key>"
-      }
-    }
-  }
-}
-```
-
-## Go CLI
-
-The Go CLI is located in the `cli` directory. It is a standalone command-line client named `firecrawl`, separate from the Python MCP server.
-
-The CLI reads the API key only from `FIRECRAWL_KEY`:
+Then let your agent inspect the file with normal local tools:
 
 ```bash
-export FIRECRAWL_KEY="<Your Firecrawl API key>"
+rg -n "pricing|risk|governance|download|PDF" ./Temp-Scrape
+bat --paging=never --line-range 40:120 ./Temp-Scrape/article.md
 ```
 
-### Build From Source
+**Scrape once. Search locally. Keep context clean.**
 
-Build for the current platform:
+## Why this toolkit exists
 
-```bash
-cd cli
-go test ./...
-go build -o firecrawl .
+Most web-search or scrape tools treat the web page as immediate model input. That works for short pages, but it breaks down quickly with long reports, news articles, PDFs, documentation pages, and research material.
+
+This toolkit uses a different workflow:
+
+```text
+remote URL / PDF
+→ local Markdown file
+→ rg / bat / sed / awk / local file tools
+→ agent reads only the relevant sections
 ```
 
-Run it directly after building:
+This is especially useful when an agent needs to collect multiple sources, compare reports, inspect citations, or build a local research folder.
 
-```bash
-./firecrawl --help
-```
+The goal is not to produce a perfectly clean article-only extraction. The goal is to produce **complete, searchable, agent-readable local source material** with reduced web noise and minimal context pollution.
 
-Build all release targets locally:
+## Core workflow
 
-```bash
-cd cli
-mkdir -p dist
-
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_windows_amd64.exe .
-CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_windows_arm64.exe .
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_linux_amd64 .
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_linux_arm64 .
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_darwin_amd64 .
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/firecrawl_darwin_arm64 .
-```
-
-### CLI Search Usage
-
-Search commands:
-
-```bash
-firecrawl aggregated --query "AI advancements 2024" --country "United States" --search-num 5 --search-time month --timeout 120
-firecrawl web --query "AI advancements 2024" --country US --search-num 5
-firecrawl news --query "OpenAI news" --search-time week
-firecrawl image --query "firecrawl logo" --search-num 10
-```
-
-Search command parameters:
-
-- `--query` (required): Search keywords.
-- `--country` (optional): Country or region name / ISO code. Default is `US`.
-- `--search-num` (optional): Number of results, range `1`-`100`. Default is `20`.
-- `--search-time` (optional): One of `hour`, `day`, `week`, `month`, `year`.
-- `--timeout` (optional): Request timeout in seconds. Must be `> 0`. Default is `120`.
-
-Search commands output compact single-line JSON, using the same mapped fields as the Python search tools:
-
-```json
-{"success":true,"data":{"web":[],"news":[],"images":[]},"creditsUsed":1}
-```
-
-### CLI Credit Usage
-
-Check team credit usage:
-
-```bash
-firecrawl credit-usage
-firecrawl credit-usage --pretty
-```
-
-Credit usage command parameters:
-
-- `--json` (optional): Output JSON. JSON is the default output format.
-- `--pretty` (optional): Pretty-print JSON output.
-
-Default output is compact JSON:
-
-```json
-{"success":true,"data":{"remainingCredits":1000,"planCredits":500000,"billingPeriodStart":"2025-01-01T00:00:00Z","billingPeriodEnd":"2025-01-31T23:59:59Z"}}
-```
-
-### CLI Scrape Usage
-
-Scrape a page and save the markdown export as `example.md` in the current directory:
+### 1. Scrape a web page or PDF into local Markdown
 
 ```bash
 firecrawl scrape \
-  --output example \
-  --url "https://www.example.com" \
-  --include-tags '["article",".content"]' \
-  --exclude-tags ".nav,.footer" \
-  --empty-tags \
-  --start-index 0 \
-  --max-characters 1200 \
-  --headers '{"X-Trace-Id":"abc123"}' \
-  --timeout 120
+  --url "https://example.com/report-or-article" \
+  --output report \
+  --path ./Temp-Scrape
 ```
 
-Save the markdown export to a specific directory:
+On success:
 
-```bash
-firecrawl scrape \
-  --output example \
-  --path ./exports/pages \
-  --url "https://www.example.com"
+```text
+true
 ```
 
-`--include-tags` and `--exclude-tags` accept these input forms:
+The file is saved as:
 
-```bash
-# Single selector
-firecrawl scrape --output page --url "https://www.example.com" --include-tags "article"
-
-# Comma-separated selector list
-firecrawl scrape --output page --url "https://www.example.com" --exclude-tags ".nav,.footer,#sidebar"
-
-# JSON string array, recommended when selectors contain spaces, quotes, or commas
-firecrawl scrape --output page --url "https://www.example.com" --include-tags '["main article",".post-content","#content"]'
+```text
+./Temp-Scrape/report.md
 ```
 
-Common CSS selector types:
-
-```bash
-# Tag, class, and ID selectors
-firecrawl scrape --output page --url "https://www.example.com" --include-tags '["article",".content","#main"]'
-
-# Attribute selectors with square brackets
-firecrawl scrape --output page --url "https://www.example.com" --include-tags '["[data-testid=\"article-body\"]","[class*=\"content\"]","[id^=\"post-\"]"]'
-
-# Descendant, child, and compound selectors
-firecrawl scrape --output page --url "https://www.example.com" --include-tags '["main article","main > article","article.post"]'
-
-# Exclusion selectors
-firecrawl scrape --output page --url "https://www.example.com" --exclude-tags '["nav[aria-label=\"Breadcrumb\"]","aside.related",".promo-banner"]'
-
-# Clear built-in exclude selectors while keeping user-provided --exclude-tags
-firecrawl scrape --output page --url "https://www.example.com" --empty-tags --exclude-tags ".nav"
-
-# Selectors that contain commas must use a JSON string array
-firecrawl scrape --output page --url "https://www.example.com" --include-tags '["article:has(h1, h2)",".content"]'
-```
-
-Scrape command parameters:
-
-- `--output` (required): Export name. The CLI writes `<output>.md`.
-- `--path` (optional): Directory where the markdown export is saved. Supports absolute and relative paths. Defaults to the current directory. If the directory does not exist, the CLI tries to create it before scraping.
-- `--url` (required): Target webpage URL.
-- `--include-tags` (optional): CSS selectors to include. Accepts a single selector, comma-separated selector string, or JSON string array.
-- `--exclude-tags` (optional): Additional CSS selectors to exclude. Accepts a single selector, comma-separated selector string, or JSON string array.
-- `--empty-tags` (optional): Clear the built-in exclude selector list for this request while keeping user-provided `--exclude-tags`.
-- `--start-index` (optional): Markdown truncation start index. Must be `>= 0`. Default is `0`.
-- `--max-characters` (optional): Maximum markdown characters from `--start-index`. Must be `> 0` when provided.
-- `--headers` (optional): JSON object with string values, for example `{"Authorization":"Bearer token","X-Trace-Id":"abc123"}`.
-- `--timeout` (optional): Request timeout in seconds. Must be `> 0`. Default is `120`.
-
-Scrape output:
-
-- On success, stdout is `true`, and the CLI writes `<output>.md` under `--path` or the current directory.
-- On failure, stdout is `false` followed by the error reason, and no file is created or overwritten.
-
-The generated markdown file uses this structure:
+The generated Markdown begins with source metadata:
 
 ```markdown
 ## title:
@@ -279,134 +69,665 @@ The generated markdown file uses this structure:
 ## language:
 ## creditsUsed:
 
----
-
 markdown content
 ```
 
-## Tool Parameters and Usage Examples
+### 2. Search locally
 
-### firecrawl Search: Perform aggregated / web / news / images search
+```bash
+rg -n "agentic|governance|pricing|risk|EBIT|download" ./Temp-Scrape
+```
 
-Parameters:
+### 3. Read only the relevant section
 
-- `query` (str, required): Keywords to search.
-- `country` (str, optional): Specify the country/region for search results. Supports Chinese names (e.g., "China"), English names (e.g., "United States"), or ISO codes (e.g., "US"). Default is "US".
-- `search_num` (int, optional): Number of results to return, range 1-100. Default is 20.
-- `search_time` (str, optional): Filter results by time range. Available values: "hour", "day", "week", "month", "year".
+```bash
+bat --paging=never --line-range 80:150 ./Temp-Scrape/report.md
+```
+
+Or with standard Unix tools:
+
+```bash
+sed -n '80,150p' ./Temp-Scrape/report.md
+```
+
+## Why stdout is intentionally small
+
+For file-producing commands such as `scrape`, stdout is deliberately minimal.
+
+On success:
+
+```text
+true
+```
+
+On failure:
+
+```text
+false
+<short error reason>
+```
+
+Large page content is written to disk, not printed to stdout by default. This is intentional: agents should not accidentally ingest a 50k, 100k, or 500k character page into context.
+
+The recommended pattern is:
+
+```text
+scrape to file
+→ inspect file size / headings / keywords
+→ read only the useful ranges
+```
+
+## Built-in boilerplate filtering
+
+The scrape command applies a built-in noise filter by default.
+
+It reduces common non-content regions such as:
+
+* scripts, styles, forms, inputs, buttons
+* nav bars, headers, footers, asides
+* menus and navigation blocks
+* logos and brand blocks
+* accessibility skip links and visually hidden elements
+* ads and advertisement containers
+* sidebars
+* breadcrumbs and pagination
+* related, recommended, and trending sections
+* common layout offset/module blocks
+
+This is not meant to aggressively delete every non-article element. The priority is **high recall with reduced noise**: keep the source material useful for local search while removing obvious boilerplate.
+
+If a page contains useful content in an unusual region, you can disable the built-in filter:
+
+```bash
+firecrawl scrape \
+  --url "https://example.com/page" \
+  --output page-raw \
+  --empty-tags
+```
+
+You can also add your own exclusions:
+
+```bash
+firecrawl scrape \
+  --url "https://example.com/page" \
+  --output page \
+  --exclude-tags ".newsletter,.promo,aside.related"
+```
+
+## Installation
+
+### Python package
+
+The Python package provides the MCP server.
+
+```bash
+uvx firecrawl-toolkit
+```
+
+Package:
+
+```text
+firecrawl-toolkit
+```
+
+### Go CLI
+
+The standalone CLI is located in the `cli` directory.
+
+Build from source:
+
+```bash
+cd cli
+go test ./...
+go build -o firecrawl .
+```
+
+Run:
+
+```bash
+./firecrawl --help
+```
+
+Build Windows example:
+
+```bash
+cd cli
+go build -o firecrawl.exe .
+```
+
+## API key
+
+The Go CLI reads the Firecrawl API key from:
+
+```bash
+FIRECRAWL_KEY
+```
+
+Linux/macOS:
+
+```bash
+export FIRECRAWL_KEY="fc-..."
+```
+
+Windows PowerShell:
+
+```powershell
+$env:FIRECRAWL_KEY="fc-..."
+```
+
+The Python MCP server uses:
+
+```bash
+FIRECRAWL_API_KEY
+```
+
+## API base URL
+
+By default, both the Go CLI and the Python MCP server use the official Firecrawl API base URL:
+
+```text
+https://api.firecrawl.dev/v2
+```
+
+For a self-hosted Firecrawl-compatible service, set:
+
+```bash
+FIRECRAWL_BASE_URL
+```
+
+Linux/macOS:
+
+```bash
+export FIRECRAWL_BASE_URL="https://your-firecrawl.example/v2"
+```
+
+Windows PowerShell:
+
+```powershell
+$env:FIRECRAWL_BASE_URL="https://your-firecrawl.example/v2"
+```
+
+## CLI commands
+
+```text
+firecrawl aggregated
+firecrawl web
+firecrawl news
+firecrawl image
+firecrawl scrape
+firecrawl credit-usage
+```
+
+## Scrape command
+
+### Basic usage
+
+```bash
+firecrawl scrape \
+  --url "https://example.com/article" \
+  --output article
+```
+
+This writes:
+
+```text
+article.md
+```
+
+### Save into a directory
+
+```bash
+firecrawl scrape \
+  --url "https://example.com/article" \
+  --output article \
+  --path ./Temp-Scrape
+```
+
+This writes:
+
+```text
+./Temp-Scrape/article.md
+```
+
+If the directory does not exist, the CLI tries to create it.
+
+### Scrape a PDF
+
+```bash
+firecrawl scrape \
+  --url "https://example.com/report.pdf" \
+  --output report-pdf \
+  --path ./Temp-Scrape
+```
+
+The CLI requests Markdown output and enables Firecrawl’s PDF parser.
+
+## Scrape options
+
+### `--output`
+
+Required. Export name.
+
+```bash
+firecrawl scrape --url "https://example.com" --output example
+```
+
+The CLI writes:
+
+```text
+example.md
+```
+
+If the provided name already ends with `.md`, it is preserved.
+
+### `--path`
+
+Optional. Output directory.
+
+```bash
+firecrawl scrape --url "https://example.com" --output example --path ./exports
+```
+
+### `--url`
+
+Required. Target web page or PDF URL.
+
+```bash
+firecrawl scrape --url "https://example.com" --output example
+```
+
+### `--include-tags`
+
+Optional. CSS selectors to include.
+
+Use this when you know the useful content is inside a specific region:
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --include-tags "article"
+```
+
+Multiple selectors:
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --include-tags ".article-body,#content,main"
+```
+
+JSON array form is recommended when selectors contain spaces, quotes, or commas:
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --include-tags '["main article",".post-content","#content"]'
+```
+
+### `--exclude-tags`
+
+Optional. Additional CSS selectors to exclude.
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --exclude-tags ".nav,.footer,#sidebar"
+```
+
+This is merged with the built-in boilerplate filter.
+
+### `--empty-tags`
+
+Optional. Disable the built-in exclude selector list for this request.
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page-raw \
+  --empty-tags
+```
+
+User-provided `--exclude-tags` are still applied:
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page-custom \
+  --empty-tags \
+  --exclude-tags ".nav"
+```
+
+### `--headers`
+
+Optional. JSON object of request headers.
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --headers '{"X-Trace-Id":"abc123"}'
+```
+
+Use sensitive headers carefully. Avoid passing credentials, cookies, or authorization tokens unless you understand the risk.
+
+### `--timeout`
+
+Optional. Request timeout in seconds. Default is `120`.
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --timeout 180
+```
+
+## Recommended agent usage
+
+Give your agent a narrow workflow instead of exposing every scrape option.
+
+### Default capture
+
+```bash
+firecrawl scrape --url "$URL" --output "$NAME" --path ./Temp-Scrape
+```
+
+### Inspect the captured source
+
+```bash
+rg -n "$KEYWORDS" ./Temp-Scrape
+bat --paging=never --line-range 1:120 "./Temp-Scrape/$NAME.md"
+```
+
+### If the page is noisy
+
+Try adding exclusions:
+
+```bash
+firecrawl scrape \
+  --url "$URL" \
+  --output "$NAME-clean" \
+  --path ./Temp-Scrape \
+  --exclude-tags ".newsletter,.promo,aside.related"
+```
+
+### If the built-in filter removes something useful
+
+Capture a raw version:
+
+```bash
+firecrawl scrape \
+  --url "$URL" \
+  --output "$NAME-raw" \
+  --path ./Temp-Scrape \
+  --empty-tags
+```
+
+## Search commands
+
+Search commands return compact single-line JSON.
+
+```bash
+firecrawl aggregated --query "AI governance 2026" --country US --search-num 10
+firecrawl web        --query "AI governance 2026" --country US --search-num 10
+firecrawl news       --query "OpenAI news" --search-time week
+firecrawl image      --query "firecrawl logo" --search-num 10
+```
+
+Available search commands:
+
+```text
+aggregated  web + news + images
+web         web results
+news        news results
+image       image results
+```
+
+### Search options
+
+#### `--query`
+
+Required. Search keywords.
+
+```bash
+firecrawl web --query "AI pricing SaaS"
+```
+
+#### `--country`
+
+Optional. Country or region name / ISO code. Default is `US`.
+
+```bash
+firecrawl web --query "AI policy" --country "United States"
+firecrawl web --query "AI policy" --country US
+```
+
+#### `--search-num`
+
+Optional. Number of results, from `1` to `100`. Default is `20`.
+
+```bash
+firecrawl web --query "AI policy" --search-num 5
+```
+
+#### `--search-time`
+
+Optional. Time filter.
+
+Allowed values:
+
+```text
+hour
+day
+week
+month
+year
+```
 
 Example:
 
-```Python
-result_json = firecrawl_web_search(
-    query="AI advancements 2024",
-    country="United States",
-    search_num=5,
-    search_time="month"
-)
+```bash
+firecrawl news --query "AI regulation" --search-time week
 ```
 
-Response (mapped):
+#### `--timeout`
 
-- Top-level fields: `success`, `data`, `creditsUsed`
-- `data.web[]`: `title`, `description`, `url`
-- `data.news[]`: `title`, `snippet`, `url`, `date`
-- `data.images[]`: `title`, `imageUrl`, `url`
-- `web` / `news` / `images` remain arrays and may be empty (`[]`)
-- Missing mapped fields are preserved as `null`
-- Output is compact single-line JSON (no extra spaces)
+Optional. Request timeout in seconds. Default is `120`.
 
-Example response:
+## Search output
+
+Search commands output compact JSON:
 
 ```json
-{"success":true,"data":{"web":[{"title":"Example Web","description":"Example description","url":"https://example.com"}],"news":[],"images":[]},"creditsUsed":1}
+{"success":true,"data":{"web":[],"news":[],"images":[]},"creditsUsed":1}
 ```
 
-### firecrawl-scrape: Scrape webpage content
+Mapped fields:
 
-Parameters:
+```text
+data.web[]:
+  title
+  description
+  url
 
-- `url` (str, required): URL of the target webpage.
-- `excludeTags` (list[str], optional, default `[]`): Additional CSS selectors to exclude; merged with built-in noise-filter selectors after normalization and deduplication unless `emptyTags=True`.
-- `includeTags` (list[str], optional, default `None`): Additional CSS selectors to include; no built-in defaults are applied, and the cleaned list is forwarded only when this parameter is provided.
-- `maxCharacters` (int, optional, default `None`): Truncate only the returned `markdown` to N characters starting at `startIndex`. Invalid values (non-int, `<= 0`) are ignored and treated as not provided.
-- `startIndex` (int, optional, default `0`): Start offset used with `maxCharacters` when slicing returned `markdown`. Invalid values (non-int, `< 0`) are treated as `0`.
-- `emptyTags` (bool, optional, default `False`): Clear the built-in exclude selector list for this request, while still keeping any user-provided `excludeTags`.
-- `headers` (dict[str, str], optional, default `None`): Root-level request headers passed through to the upstream scrape request only when a non-empty object is provided.
+data.news[]:
+  title
+  snippet
+  url
+  date
 
-Example:
-
-```Python
-result_json = firecrawl_scrape(
-    url="https://www.example.com",
-    includeTags=["article", ".content"],
-    excludeTags=["[class^=\"skip\"]", "[id*=\"disqus\"]"],
-    startIndex=0,
-    maxCharacters=1200,
-    headers={"Authorization": "Bearer token", "X-Trace-Id": "abc123"}
-)
-```
-This returns at most 1200 characters in `markdown`, starting at character index 0.
-
-To explicitly send an empty include selector list:
-
-```Python
-result_json = firecrawl_scrape(
-    url="https://www.example.com",
-    includeTags=[]
-)
+data.images[]:
+  title
+  imageUrl
+  url
 ```
 
-To disable only the built-in exclude selectors for one request:
+Search results are intended to help agents discover URLs. For detailed reading, scrape selected URLs into local Markdown files.
 
-```Python
-result_json = firecrawl_scrape(
-    url="https://www.example.com",
-    emptyTags=True
-)
+Recommended pattern:
+
+```bash
+firecrawl web --query "AI trust maturity survey 2026" --search-num 5
+firecrawl scrape --url "<selected-url>" --output ai-trust-survey --path ./Temp-Scrape
+rg -n "governance|risk|agentic|maturity" ./Temp-Scrape
 ```
 
-To disable the built-in exclude selectors but keep your own:
+## Credit usage
 
-```Python
-result_json = firecrawl_scrape(
-    url="https://www.example.com",
-    excludeTags=[".nav"],
-    emptyTags=True
-)
+Check Firecrawl team credit usage:
+
+```bash
+firecrawl credit-usage
 ```
 
-Built-in noise filtering:
+Pretty-print:
 
-- The tool uses an internal `excludeTags` selector set to suppress noisy DOM regions and prioritize main content quality.
-- `includeTags` has no built-in defaults and is only forwarded when explicitly provided.
-- Passing `emptyTags=True` clears only the built-in exclude selector set for that request.
-- If the first scrape returns `data.markdown == ""`, the tool automatically retries once without `includeTags`/`excludeTags` as a fallback.
-- `startIndex` / `maxCharacters` slicing is applied locally in this toolkit post-processing and is not forwarded to upstream Firecrawl payloads.
+```bash
+firecrawl credit-usage --pretty
+```
 
-Response (mapped):
-
-- Top-level fields: `success`, `proxyUsed`, `title`, `description`, `language`, `markdown`, `creditsUsed`
-- `markdown` is URL-decoded before returning to the client
-- When a valid `maxCharacters` is provided, `markdown` length is capped at that value after applying `startIndex`
-- Missing mapped fields are preserved as `null`
-- Output is compact single-line JSON (no extra spaces)
-
-Example response:
+Default output is JSON:
 
 ```json
-{"success":true,"proxyUsed":"auto","title":"Example Page","description":"Example summary","language":"en","markdown":"Hello world!","creditsUsed":1}
+{"success":true,"data":{"remainingCredits":1000,"planCredits":500000,"billingPeriodStart":"2025-01-01T00:00:00Z","billingPeriodEnd":"2025-01-31T23:59:59Z"}}
 ```
 
-## Response Contract Notes
+## Exit behavior
 
-- `firecrawl-search` and `firecrawl-scrape` success payloads are mapped to stable minimal schemas.
-- Missing mapped fields are preserved as `null` (arrays remain arrays, and may be empty).
-- Both success and error responses are compact single-line JSON.
+### Scrape
 
-## License Agreement
+Success:
 
-This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later).
+```text
+true
+```
 
+Failure:
 
+```text
+false
+<error reason>
+```
 
+The CLI writes the Markdown file only after a successful scrape. Existing files are not created or overwritten on scrape failure.
+
+### Search and credit usage
+
+Search and credit usage commands output JSON.
+
+## Example: local research folder
+
+```bash
+mkdir -p ./Temp-Scrape
+
+firecrawl scrape \
+  --url "https://www.mckinsey.com/capabilities/tech-and-ai/our-insights/tech-forward/state-of-ai-trust-in-2026-shifting-to-the-agentic-era" \
+  --output mckinsey-ai-trust-2026 \
+  --path ./Temp-Scrape
+
+firecrawl scrape \
+  --url "https://www.reuters.com/business/world-at-work/ai-will-lead-labour-shortages-jeff-bezos-says-vivatech-2026-06-17/" \
+  --output reuters-bezos-ai-labor \
+  --path ./Temp-Scrape
+
+rg -n "agentic|governance|risk|labor shortage|AI" ./Temp-Scrape
+bat --paging=never --line-range 1:120 ./Temp-Scrape/mckinsey-ai-trust-2026.md
+```
+
+This creates a local source folder that can be searched and revisited without repeatedly fetching or pasting web pages into context.
+
+## Python MCP server
+
+The project also includes a Python MCP server.
+
+Run with:
+
+```bash
+uvx firecrawl-toolkit
+```
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "firecrawl": {
+      "command": "uvx",
+      "args": ["firecrawl-toolkit"],
+      "env": {
+        "FIRECRAWL_API_KEY": "<Your Firecrawl API key>",
+        "FIRECRAWL_MCP_ENABLE_STDIO": "1"
+      }
+    }
+  }
+}
+```
+
+MCP environment variables:
+
+| Variable                            | Default                         | Description                                                  |
+| ----------------------------------- | ------------------------------- | ------------------------------------------------------------ |
+| `FIRECRAWL_API_KEY`                 | `fc-xxx`                        | Firecrawl API key. Multiple keys can be separated by commas. |
+| `FIRECRAWL_BASE_URL`                | `https://api.firecrawl.dev/v2`  | Firecrawl API base URL. Set this for self-hosted services.   |
+| `FIRECRAWL_HTTP2`                   | `0`                             | Enable HTTP/2 with `1`.                                      |
+| `FIRECRAWL_MAX_WORKERS`             | `10`                            | Number of worker processes.                                  |
+| `FIRECRAWL_MAX_CONNECTIONS`         | `200`                           | Maximum HTTP connections.                                    |
+| `FIRECRAWL_MAX_CONCURRENT_REQUESTS` | `200`                           | Maximum concurrent requests.                                 |
+| `FIRECRAWL_KEEPALIVE`               | `20`                            | Maximum keepalive connections.                               |
+| `FIRECRAWL_RETRY_COUNT`             | `3`                             | Maximum retry count.                                         |
+| `FIRECRAWL_RETRY_BASE_DELAY`        | `0.5`                           | Base retry delay in seconds.                                 |
+| `FIRECRAWL_ENDPOINT_CONCURRENCY`    | `{"search":10,"scrape":2}`      | Per-endpoint concurrency limits.                             |
+| `FIRECRAWL_ENDPOINT_RETRYABLE`      | `{"scrape": false}`             | Per-endpoint retry configuration.                            |
+| `FIRECRAWL_MCP_ENABLE_STDIO`        | `0`                             | Enable STDIO transport.                                      |
+| `FIRECRAWL_MCP_ENABLE_HTTP`         | `0`                             | Enable HTTP transport.                                       |
+| `FIRECRAWL_MCP_ENABLE_SSE`          | `0`                             | Enable SSE transport.                                        |
+| `FIRECRAWL_MCP_HTTP_HOST`           | `127.0.0.1`                     | HTTP host.                                                   |
+| `FIRECRAWL_MCP_HTTP_PORT`           | `7001`                          | HTTP port.                                                   |
+| `FIRECRAWL_MCP_SSE_HOST`            | `127.0.0.1`                     | SSE host.                                                    |
+| `FIRECRAWL_MCP_SSE_PORT`            | `7001`                          | SSE port.                                                    |
+| `FIRECRAWL_MCP_LOCK_FILE`           | `/tmp/firecrawl_mcp.lock`       | Lock file path.                                              |
+
+STDIO, HTTP, and SSE should be used one at a time. Start separate services with different lock files if multiple transports are needed.
+
+## MCP tools
+
+The MCP server provides:
+
+| Tool                          | Description                                      |
+| ----------------------------- | ------------------------------------------------ |
+| `firecrawl-aggregated-search` | Aggregated web, news, and image search.          |
+| `firecrawl-web-search`        | Web search.                                      |
+| `firecrawl-news-search`       | News search.                                     |
+| `firecrawl-image-search`      | Image search.                                    |
+| `firecrawl-scrape`            | Scrape a URL and return mapped Markdown content. |
+
+For local shell-based agents, the Go CLI is usually the simpler and safer interface because it writes large scrape results to files instead of returning them directly to model context.
+
+## Development
+
+Run Go CLI tests:
+
+```bash
+cd cli
+go test ./...
+```
+
+Build the CLI:
+
+```bash
+cd cli
+go build -o firecrawl .
+```
+
+Run Python tests:
+
+```bash
+pytest
+```
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 or later.

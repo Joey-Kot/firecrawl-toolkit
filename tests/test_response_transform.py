@@ -88,6 +88,15 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(server._parse_api_keys(" , "), [])
         self.assertEqual(server._parse_api_keys(None), [])
 
+    def test_build_api_endpoints_uses_configured_base_url(self):
+        self.assertEqual(
+            server._build_api_endpoints("https://self-hosted.example/api/v2/"),
+            {
+                "search": "https://self-hosted.example/api/v2/search",
+                "scrape": "https://self-hosted.example/api/v2/scrape",
+            },
+        )
+
     async def test_execute_firecrawl_request_uses_random_api_key(self):
         class _FakeResponse:
             def raise_for_status(self):

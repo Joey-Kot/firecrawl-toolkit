@@ -19,12 +19,11 @@ import (
 )
 
 const (
-	apiKeyEnv           = "FIRECRAWL_KEY"
-	searchEndpoint      = "https://api.firecrawl.dev/v2/search"
-	scrapeEndpoint      = "https://api.firecrawl.dev/v2/scrape"
-	creditUsageEndpoint = "https://api.firecrawl.dev/v2/team/credit-usage"
-	defaultTimeoutSecs  = 120
-	maxTimeoutSecs      = 9223372036
+	apiKeyEnv          = "FIRECRAWL_KEY"
+	baseURLEnv         = "FIRECRAWL_BASE_URL"
+	defaultBaseURL     = "https://api.firecrawl.dev/v2"
+	defaultTimeoutSecs = 120
+	maxTimeoutSecs     = 9223372036
 )
 
 //go:embed data/country_aliases.json
@@ -33,9 +32,9 @@ var embeddedData embed.FS
 var (
 	httpClient = &http.Client{Timeout: 30 * time.Second}
 	endpoints  = map[string]string{
-		"search":       searchEndpoint,
-		"scrape":       scrapeEndpoint,
-		"credit-usage": creditUsageEndpoint,
+		"search":       joinEndpoint(defaultBaseURL, "search"),
+		"scrape":       joinEndpoint(defaultBaseURL, "scrape"),
+		"credit-usage": joinEndpoint(defaultBaseURL, "team/credit-usage"),
 	}
 	countryAliases = loadCountryAliases()
 )
@@ -176,8 +175,6 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	var includeTags string
 	var excludeTags string
 	var emptyTags bool
-	startIndex := 0
-	var maxCharacters int
 	var headersRaw string
 	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md.")
@@ -186,20 +183,12 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.StringVar(&includeTags, "include-tags", "", "CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.StringVar(&excludeTags, "exclude-tags", "", "Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.BoolVar(&emptyTags, "empty-tags", false, "Clear the built-in exclude selector list while keeping user-provided --exclude-tags.")
-	fs.IntVar(&startIndex, "start-index", 0, "Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.")
-	fs.IntVar(&maxCharacters, "max-characters", 0, "Maximum markdown characters from start-index. Optional. Must be > 0 when provided.")
 	fs.StringVar(&headersRaw, "headers", "", `Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.`)
 	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printScrapeUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		return cliError{code: 2}
 	}
-	maxCharactersProvided := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "max-characters" {
-			maxCharactersProvided = true
-		}
-	})
 	if strings.TrimSpace(output) == "" {
 		fs.Usage()
 		return cliError{message: "--output is required", code: 2}
@@ -210,12 +199,6 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	if fs.NArg() > 0 {
 		return cliError{message: fmt.Sprintf("unexpected positional arguments: %s", strings.Join(fs.Args(), " ")), code: 2}
-	}
-	if startIndex < 0 {
-		return cliError{message: "--start-index must be greater than or equal to 0", code: 2}
-	}
-	if maxCharactersProvided && maxCharacters <= 0 {
-		return cliError{message: "--max-characters must be greater than 0 when provided", code: 2}
 	}
 	if err := validateTimeoutSecs(timeoutSecs); err != nil {
 		return cliError{message: err.Error(), code: 2}
@@ -256,11 +239,6 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	result := transformScrapeResult(raw, data, targetURL)
-	if maxCharacters > 0 {
-		if markdown, ok := result["markdown"].(string); ok {
-			result["markdown"] = truncateRunes(markdown, startIndex, maxCharacters)
-		}
-	}
 
 	path := outputPath(output, outputDir)
 	if err := os.WriteFile(path, []byte(renderMarkdownFile(result)), 0o644); err != nil {
@@ -372,7 +350,7 @@ func firecrawlGet(endpointName string) (map[string]any, error) {
 	if key == "" {
 		return nil, fmt.Errorf("%s is required", apiKeyEnv)
 	}
-	endpoint := endpoints[endpointName]
+	endpoint := endpointURL(endpointName)
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -392,7 +370,7 @@ func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int)
 	if key == "" {
 		return nil, fmt.Errorf("%s is required", apiKeyEnv)
 	}
-	endpoint := endpoints[endpointName]
+	endpoint := endpointURL(endpointName)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -411,6 +389,27 @@ func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int)
 	}
 	defer resp.Body.Close()
 	return parseFirecrawlResponse(endpointName, resp)
+}
+
+func endpointURL(endpointName string) string {
+	baseURL := strings.TrimSpace(os.Getenv(baseURLEnv))
+	if baseURL == "" {
+		return endpoints[endpointName]
+	}
+	switch endpointName {
+	case "search":
+		return joinEndpoint(baseURL, "search")
+	case "scrape":
+		return joinEndpoint(baseURL, "scrape")
+	case "credit-usage":
+		return joinEndpoint(baseURL, "team/credit-usage")
+	default:
+		return endpoints[endpointName]
+	}
+}
+
+func joinEndpoint(baseURL string, path string) string {
+	return strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 func validateTimeoutSecs(timeoutSecs int) error {
@@ -660,21 +659,6 @@ func stableUnique(items []string) []string {
 	return result
 }
 
-func truncateRunes(markdown string, startIndex int, maxCharacters int) string {
-	if startIndex < 0 || maxCharacters <= 0 {
-		return markdown
-	}
-	runes := []rune(markdown)
-	if startIndex >= len(runes) {
-		return ""
-	}
-	end := startIndex + maxCharacters
-	if end > len(runes) {
-		end = len(runes)
-	}
-	return string(runes[startIndex:end])
-}
-
 func scrapeErrorReason(raw map[string]any) string {
 	for _, key := range []string{"message", "error"} {
 		if val, ok := raw[key]; ok && val != nil {
@@ -840,10 +824,11 @@ func printRootUsage(w io.Writer) {
   firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
   firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
   firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
-  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>] [--timeout <seconds>]
+  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--headers <json-object>] [--timeout <seconds>]
   firecrawl credit-usage [--json] [--pretty]
 
 The API key is read from FIRECRAWL_KEY.
+The optional API base URL is read from FIRECRAWL_BASE_URL and defaults to https://api.firecrawl.dev/v2.
 
 `)
 }
@@ -867,7 +852,7 @@ Output:
 
 func printScrapeUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--start-index <n>] [--max-characters <n>] [--headers <json-object>] [--timeout <seconds>]
+  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--headers <json-object>] [--timeout <seconds>]
 
 Parameters:
   --output          Export name. Required. The result is saved as <output>.md.
@@ -876,8 +861,6 @@ Parameters:
   --include-tags    CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.
   --exclude-tags    Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.
   --empty-tags      Clear the built-in exclude selector list while keeping user-provided --exclude-tags.
-  --start-index     Starting index for markdown truncation. Optional. Must be >= 0. Default is 0.
-  --max-characters  Maximum markdown characters from start-index. Optional. Must be > 0 when provided.
   --headers         Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.
   --timeout         Request timeout in seconds. Optional. Must be > 0. Default is 120.
 
