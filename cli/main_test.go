@@ -113,6 +113,37 @@ func TestCreditUsageCommandOutputsJSON(t *testing.T) {
 	}
 }
 
+func TestAPIKeyParsingSplitsCommasAndIgnoresEmptyEntries(t *testing.T) {
+	keys := parseAPIKeys(" key-1, key-2 ,,key-3 ")
+	if strings.Join(keys, ",") != "key-1,key-2,key-3" {
+		t.Fatalf("parseAPIKeys returned %#v", keys)
+	}
+	if keys := parseAPIKeys(" , "); len(keys) != 0 {
+		t.Fatalf("expected empty key list, got %#v", keys)
+	}
+}
+
+func TestRequestsUseAKeyFromCommaSeparatedPool(t *testing.T) {
+	t.Setenv(apiKeyEnv, "key-1, key-2")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		got := r.Header.Get("Authorization")
+		if got != "Bearer key-1" && got != "Bearer key-2" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		return jsonResponse(200, `{"success":true,"data":{"web":[],"news":[],"images":[]}}`), nil
+	})
+
+	old := endpoints["search"]
+	endpoints["search"] = "https://example.test/search"
+	t.Cleanup(func() { endpoints["search"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"web", "--query", "ai"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+}
+
 func TestEndpointURLUsesConfiguredBaseURL(t *testing.T) {
 	t.Setenv(baseURLEnv, "https://self-hosted.example/api/v2/")
 

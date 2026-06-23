@@ -670,7 +670,7 @@ MCP environment variables:
 
 | Variable                            | Default                         | Description                                                  |
 | ----------------------------------- | ------------------------------- | ------------------------------------------------------------ |
-| `FIRECRAWL_API_KEY`                 | `fc-xxx`                        | Firecrawl API key. Multiple keys can be separated by commas. |
+| `FIRECRAWL_API_KEY`                 | `fc-xxx`                        | Firecrawl API key.                                           |
 | `FIRECRAWL_BASE_URL`                | `https://api.firecrawl.dev/v2`  | Firecrawl API base URL. Set this for self-hosted services.   |
 | `FIRECRAWL_HTTP2`                   | `0`                             | Enable HTTP/2 with `1`.                                      |
 | `FIRECRAWL_MAX_WORKERS`             | `10`                            | Number of worker processes.                                  |

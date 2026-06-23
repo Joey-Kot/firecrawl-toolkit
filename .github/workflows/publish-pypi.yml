@@ -3,6 +3,12 @@ name: Publish to PyPI
 on:
   push:
     branches: [main]
+    paths:
+      - "firecrawl_toolkit/**"
+      - "tests/**"
+      - "scripts/**"
+      - "pyproject.toml"
+      - ".github/workflows/publish-pypi.yml"
   workflow_dispatch:
     inputs:
       confirm:

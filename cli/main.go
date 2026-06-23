@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -345,10 +346,37 @@ func buildScrapePayload(targetURL string, includeTags []string, excludeTags []st
 	return payload
 }
 
-func firecrawlGet(endpointName string) (map[string]any, error) {
-	key := strings.TrimSpace(os.Getenv(apiKeyEnv))
+func parseAPIKeys(value string) []string {
+	parts := strings.Split(value, ",")
+	keys := make([]string, 0, len(parts))
+	for _, part := range parts {
+		key := strings.TrimSpace(part)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func selectAPIKey(keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[rand.Intn(len(keys))]
+}
+
+func apiKeyFromEnv() (string, error) {
+	key := selectAPIKey(parseAPIKeys(os.Getenv(apiKeyEnv)))
 	if key == "" {
-		return nil, fmt.Errorf("%s is required", apiKeyEnv)
+		return "", fmt.Errorf("%s is required", apiKeyEnv)
+	}
+	return key, nil
+}
+
+func firecrawlGet(endpointName string) (map[string]any, error) {
+	key, err := apiKeyFromEnv()
+	if err != nil {
+		return nil, err
 	}
 	endpoint := endpointURL(endpointName)
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
@@ -366,9 +394,9 @@ func firecrawlGet(endpointName string) (map[string]any, error) {
 }
 
 func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int) (map[string]any, error) {
-	key := strings.TrimSpace(os.Getenv(apiKeyEnv))
-	if key == "" {
-		return nil, fmt.Errorf("%s is required", apiKeyEnv)
+	key, err := apiKeyFromEnv()
+	if err != nil {
+		return nil, err
 	}
 	endpoint := endpointURL(endpointName)
 	body, err := json.Marshal(payload)
