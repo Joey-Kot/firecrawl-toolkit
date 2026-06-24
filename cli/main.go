@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -791,7 +793,15 @@ func countryVariants(alias string) []string {
 }
 
 func normalizeCountry(value string) string {
-	value = strings.ReplaceAll(value, "\u3000", " ")
+	value = norm.NFKD.String(value)
+	var folded strings.Builder
+	for _, r := range value {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		folded.WriteRune(r)
+	}
+	value = strings.ReplaceAll(folded.String(), "\u3000", " ")
 	value = strings.TrimSpace(strings.ToLower(value))
 	var b strings.Builder
 	previousSpace := false

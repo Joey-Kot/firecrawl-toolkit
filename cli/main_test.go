@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 func TestSearchCommandOutputsCompactMappedJSON(t *testing.T) {
@@ -435,6 +438,8 @@ func TestCountryAliases(t *testing.T) {
 		"Viet Nam":        "VN",
 		"Congo-Kinshasa":  "CD",
 		"Aland Islands":   "AX",
+		"Reunion":         "RE",
+		"Cote d'Ivoire":   "CI",
 		"unknown-country": "US",
 	}
 	for input, want := range cases {
@@ -445,6 +450,57 @@ func TestCountryAliases(t *testing.T) {
 	if len(countryAliases) == 0 {
 		t.Fatal("expected embedded country aliases to load")
 	}
+}
+
+func TestCountryAliasDataMatchesPythonPackage(t *testing.T) {
+	cliData, err := os.ReadFile(filepath.Join("data", "country_aliases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pythonData, err := os.ReadFile(filepath.Join("..", "firecrawl_toolkit", "data", "country_aliases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(cliData, pythonData) {
+		t.Fatal("cli/data/country_aliases.json differs from firecrawl_toolkit/data/country_aliases.json")
+	}
+}
+
+func TestEveryAliasAndFoldedAliasResolves(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("data", "country_aliases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string][]string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	for code, aliases := range raw {
+		want := strings.ToUpper(code)
+		for _, alias := range aliases {
+			if got := getCountryCodeAlpha2(alias); got != want {
+				t.Fatalf("getCountryCodeAlpha2(%q) = %q, want %q", alias, got, want)
+			}
+			folded := foldDiacritics(alias)
+			if folded != alias {
+				if got := getCountryCodeAlpha2(folded); got != want {
+					t.Fatalf("getCountryCodeAlpha2(%q folded from %q) = %q, want %q", folded, alias, got, want)
+				}
+			}
+		}
+	}
+}
+
+func foldDiacritics(value string) string {
+	value = norm.NFKD.String(value)
+	var b strings.Builder
+	for _, r := range value {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

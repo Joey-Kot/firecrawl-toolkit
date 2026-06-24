@@ -12,6 +12,7 @@
 import json
 import sys
 import types
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -90,6 +91,8 @@ class CountryAliasesCoverageTests(unittest.TestCase):
             "Viet Nam": "VN",
             "Turkiye": "TR",
             "Congo-Kinshasa": "CD",
+            "Reunion": "RE",
+            "Cote d'Ivoire": "CI",
             "美國": "US",
             "英國": "GB",
             "南韓": "KR",
@@ -121,6 +124,29 @@ class CountryAliasesCoverageTests(unittest.TestCase):
         for code, names in data.items():
             with self.subTest(code=code):
                 self.assertEqual(len(names), len(set(names)))
+
+    def test_cli_and_python_alias_data_match(self):
+        python_data = Path("firecrawl_toolkit/data/country_aliases.json").read_bytes()
+        cli_data = Path("cli/data/country_aliases.json").read_bytes()
+        self.assertEqual(cli_data, python_data)
+
+    def test_every_alias_and_folded_alias_resolves(self):
+        data_path = Path("firecrawl_toolkit/data/country_aliases.json")
+        data = json.loads(data_path.read_text(encoding="utf-8"))
+        for code, aliases in data.items():
+            expected = code.upper()
+            for alias in aliases:
+                with self.subTest(alias=alias):
+                    self.assertEqual(server.get_country_code_alpha2(alias), expected)
+                folded = _fold_diacritics(alias)
+                if folded != alias:
+                    with self.subTest(alias=folded, original=alias):
+                        self.assertEqual(server.get_country_code_alpha2(folded), expected)
+
+
+def _fold_diacritics(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
 
 
 if __name__ == "__main__":
