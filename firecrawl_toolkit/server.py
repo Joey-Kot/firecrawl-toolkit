@@ -69,27 +69,10 @@ API_KEYS: List[str] = _parse_api_keys(API_KEY)
 mcp = FastMCP("firecrawl-mcp")
 
 # 加载本地国家别名字典 (data/country_aliases.json)
-# 简化索引：仅使用别名字典 ALIAS_MAP，并生成按字母序排列的别名列表 ALIAS_KEYS_SORTED。
-# 使用 Python 内置的 `sorted()` 对别名键进行排序。
+# 简化索引：仅使用别名字典 ALIAS_MAP（normalized alias -> alpha2）。
 ALIAS_MAP: Dict[str, str] = {}
-ALIAS_KEYS_SORTED: list = []
 
 _aliases_path = os.path.join(os.path.dirname(__file__), "data", "country_aliases.json")
-
-# Quick Sort 实现（用于对别名字典键排序）
-
-# 二分查找（在已排序的列表中查找精确匹配）
-def binary_search(arr: list, target: str) -> Optional[int]:
-    lo, hi = 0, len(arr) - 1
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        if arr[mid] == target:
-            return mid
-        if arr[mid] < target:
-            lo = mid + 1
-        else:
-            hi = mid - 1
-    return None
 
 def normalize(text: str) -> str:
     """归一化国家/地区名称：NFKD、去重音、转小写、去标点、折叠空白"""
@@ -151,9 +134,6 @@ try:
                     continue
                 # 后来的同名别名以最后一个为准（覆盖），保持简单明了
                 ALIAS_MAP[key] = code_up
-
-    # 使用 Python 内置排序对别名字典的键进行排序，供二分查找使用
-    ALIAS_KEYS_SORTED = sorted(ALIAS_MAP.keys())
 
 except FileNotFoundError:
     logger.warning("国家别名字典未找到: %s", _aliases_path)
@@ -479,8 +459,7 @@ def _truncate_markdown(
 def get_country_code_alpha2(country_name: Optional[str]) -> str:
     """
     国家代码解析（已简化）：
-    - 仅基于别名字典 ALIAS_MAP 进行查找，使用 ALIAS_KEYS_SORTED + 二分查找匹配别名键。
-    - 优先在别名字典中查找传入参数（归一化后）；若命中则返回对应 alpha2。
+    - 基于别名字典 ALIAS_MAP 查找传入参数（归一化后）；若命中则返回对应 alpha2。
     - 如果传入为两字母 ISO2 则作为后备直接返回大写。
     - 未找到则默认返回 'US'。
     """
@@ -497,12 +476,6 @@ def get_country_code_alpha2(country_name: Optional[str]) -> str:
     if norm in ALIAS_MAP:
         return ALIAS_MAP[norm]
 
-    # 对大规模别名列表，使用已排序键列表 + 二分查找
-    if ALIAS_KEYS_SORTED:
-        idx = binary_search(ALIAS_KEYS_SORTED, norm)
-        if idx is not None:
-            return ALIAS_MAP.get(ALIAS_KEYS_SORTED[idx], "US")
-
     # 如果已经是两字母 ISO2，作为后备直接返回大写
     if len(name) == 2 and name.isalpha():
         return name.upper()
@@ -511,10 +484,6 @@ def get_country_code_alpha2(country_name: Optional[str]) -> str:
     u_norm = normalize(name.upper())
     if u_norm in ALIAS_MAP:
         return ALIAS_MAP[u_norm]
-    if ALIAS_KEYS_SORTED:
-        idx = binary_search(ALIAS_KEYS_SORTED, u_norm)
-        if idx is not None:
-            return ALIAS_MAP.get(ALIAS_KEYS_SORTED[idx], "US")
 
     logger.info("未找到国家名称 '%s'，使用默认国家码 US。", country_name)
     return "US"
