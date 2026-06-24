@@ -71,6 +71,35 @@ func TestSearchCommandOutputsCompactMappedJSON(t *testing.T) {
 	}
 }
 
+func TestSearchCommandUsesTimeoutFlagForRequestAndPayload(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, 7)
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["timeout"] != float64(7000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
+		}
+		scrapeOptions := payload["scrapeOptions"].(map[string]any)
+		if scrapeOptions["timeout"] != float64(7000) {
+			t.Fatalf("scrapeOptions.timeout = %#v", scrapeOptions["timeout"])
+		}
+		return jsonResponse(200, `{"success":true,"data":{"web":[],"news":[],"images":[]}}`), nil
+	})
+
+	old := endpoints["search"]
+	endpoints["search"] = "https://example.test/search"
+	t.Cleanup(func() { endpoints["search"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"web", "--query", "ai", "--timeout", "7"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+}
+
 func TestSearchCommandRetriesRetryableFailures(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	t.Setenv("FIRECRAWL_RETRY_BASE_DELAY", "0")
