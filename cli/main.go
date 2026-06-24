@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -27,6 +28,8 @@ const (
 	defaultBaseURL     = "https://api.firecrawl.dev/v2"
 	defaultTimeoutSecs = 120
 	maxTimeoutSecs     = 9223372036
+	defaultRetryCount  = 3
+	defaultRetryDelay  = 500 * time.Millisecond
 )
 
 //go:embed data/country_aliases.json
@@ -133,7 +136,7 @@ func runSearch(name string, sources []string, args []string, stdout io.Writer, s
 		payload["tbs"] = tbs
 	}
 
-	raw, err := firecrawlPost("search", payload, timeoutSecs)
+	raw, err := firecrawlPostWithRetry("search", payload, timeoutSecs)
 	if err != nil {
 		out := compactJSON(map[string]any{
 			"success": false,
@@ -229,6 +232,14 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		fmt.Fprintln(stdout, err.Error())
 		return cliError{code: 1}
 	}
+	if hasEmptyScrapeMarkdown(raw) && upstreamSuccessNotFalse(raw) {
+		fallbackPayload := clonePayload(payload)
+		delete(fallbackPayload, "includeTags")
+		delete(fallbackPayload, "excludeTags")
+		if fallbackRaw, fallbackErr := firecrawlPost("scrape", fallbackPayload, timeoutSecs); fallbackErr == nil && upstreamSuccessNotFalse(fallbackRaw) && scrapeData(fallbackRaw) != nil {
+			raw = fallbackRaw
+		}
+	}
 	if success, ok := raw["success"].(bool); ok && !success {
 		fmt.Fprintln(stdout, "false")
 		fmt.Fprintln(stdout, scrapeErrorReason(raw))
@@ -269,7 +280,7 @@ func runCreditUsage(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	_ = jsonOutput
 
-	raw, err := firecrawlGet("credit-usage")
+	raw, err := firecrawlGetWithRetry("credit-usage")
 	if err != nil {
 		fmt.Fprintln(stdout, formatJSON(map[string]any{
 			"success": false,
@@ -389,10 +400,16 @@ func firecrawlGet(endpointName string) (map[string]any, error) {
 	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
 	}
 	defer resp.Body.Close()
 	return parseFirecrawlResponse(endpointName, resp)
+}
+
+func firecrawlGetWithRetry(endpointName string) (map[string]any, error) {
+	return firecrawlWithRetry(func() (map[string]any, error) {
+		return firecrawlGet(endpointName)
+	})
 }
 
 func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int) (map[string]any, error) {
@@ -415,10 +432,34 @@ func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int)
 	client := clientWithTimeout(timeoutSecs)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
 	}
 	defer resp.Body.Close()
 	return parseFirecrawlResponse(endpointName, resp)
+}
+
+func firecrawlPostWithRetry(endpointName string, payload map[string]any, timeoutSecs int) (map[string]any, error) {
+	return firecrawlWithRetry(func() (map[string]any, error) {
+		return firecrawlPost(endpointName, payload, timeoutSecs)
+	})
+}
+
+func firecrawlWithRetry(call func() (map[string]any, error)) (map[string]any, error) {
+	retries := retryCountFromEnv()
+	delay := retryDelayFromEnv()
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		raw, err := call()
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if attempt == retries || !isRetryableFirecrawlError(err) {
+			break
+		}
+		time.Sleep(delay * time.Duration(1<<attempt))
+	}
+	return nil, lastErr
 }
 
 func endpointURL(endpointName string) string {
@@ -472,22 +513,85 @@ func parseFirecrawlResponse(endpointName string, resp *http.Response) (map[strin
 		return nil, readErr
 	}
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var parsed map[string]any
+		if len(respBody) > 0 {
+			_ = json.Unmarshal(respBody, &parsed)
+		}
+		if parsed != nil {
+			return nil, firecrawlHTTPError{endpoint: endpointName, statusCode: resp.StatusCode, message: scrapeErrorReason(parsed)}
+		}
+		return nil, firecrawlHTTPError{endpoint: endpointName, statusCode: resp.StatusCode}
+	}
 	var parsed map[string]any
 	if len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, &parsed); err != nil {
 			return nil, fmt.Errorf("%s response JSON parse failed: %w", endpointName, err)
 		}
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if parsed != nil {
-			return nil, fmt.Errorf("%s HTTP status error: %d: %s", endpointName, resp.StatusCode, scrapeErrorReason(parsed))
-		}
-		return nil, fmt.Errorf("%s HTTP status error: %d", endpointName, resp.StatusCode)
-	}
 	if parsed == nil {
 		return nil, fmt.Errorf("%s response is empty", endpointName)
 	}
 	return parsed, nil
+}
+
+type firecrawlHTTPError struct {
+	endpoint   string
+	statusCode int
+	message    string
+}
+
+func (e firecrawlHTTPError) Error() string {
+	if e.message != "" {
+		return fmt.Sprintf("%s HTTP status error: %d: %s", e.endpoint, e.statusCode, e.message)
+	}
+	return fmt.Sprintf("%s HTTP status error: %d", e.endpoint, e.statusCode)
+}
+
+func isRetryableFirecrawlError(err error) bool {
+	var httpErr firecrawlHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.statusCode >= 500 && httpErr.statusCode < 600
+	}
+	var requestErr firecrawlRequestError
+	return errors.As(err, &requestErr)
+}
+
+type firecrawlRequestError struct {
+	endpoint string
+	err      error
+}
+
+func (e firecrawlRequestError) Error() string {
+	return fmt.Sprintf("%s request error: %v", e.endpoint, e.err)
+}
+
+func (e firecrawlRequestError) Unwrap() error {
+	return e.err
+}
+
+func retryCountFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv("FIRECRAWL_RETRY_COUNT"))
+	if raw == "" {
+		return defaultRetryCount
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return defaultRetryCount
+	}
+	return value
+}
+
+func retryDelayFromEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("FIRECRAWL_RETRY_BASE_DELAY"))
+	if raw == "" {
+		return defaultRetryDelay
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < 0 {
+		return defaultRetryDelay
+	}
+	return time.Duration(value * float64(time.Second))
 }
 
 func transformSearchResult(raw map[string]any, data map[string]any) map[string]any {
@@ -530,6 +634,33 @@ func scrapeURL(metadata map[string]any, targetURL string) string {
 		}
 	}
 	return targetURL
+}
+
+func scrapeData(raw map[string]any) map[string]any {
+	data, _ := raw["data"].(map[string]any)
+	return data
+}
+
+func hasEmptyScrapeMarkdown(raw map[string]any) bool {
+	data := scrapeData(raw)
+	if data == nil {
+		return false
+	}
+	markdown, ok := data["markdown"].(string)
+	return ok && markdown == ""
+}
+
+func upstreamSuccessNotFalse(raw map[string]any) bool {
+	success, ok := raw["success"].(bool)
+	return !ok || success
+}
+
+func clonePayload(payload map[string]any) map[string]any {
+	clone := make(map[string]any, len(payload))
+	for key, value := range payload {
+		clone[key] = value
+	}
+	return clone
 }
 
 func mapItems(items any, fields []string) []map[string]any {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -70,6 +71,59 @@ func TestSearchCommandOutputsCompactMappedJSON(t *testing.T) {
 	}
 }
 
+func TestSearchCommandRetriesRetryableFailures(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	t.Setenv("FIRECRAWL_RETRY_BASE_DELAY", "0")
+	calls := 0
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return jsonResponse(502, `<html>temporary</html>`), nil
+		case 2:
+			return nil, errors.New("connection reset")
+		default:
+			return jsonResponse(200, `{"success":true,"data":{"web":[],"news":[],"images":[]}}`), nil
+		}
+	})
+
+	old := endpoints["search"]
+	endpoints["search"] = "https://example.test/search"
+	t.Cleanup(func() { endpoints["search"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"web", "--query", "ai"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3", calls)
+	}
+}
+
+func TestSearchCommandDoesNotRetryClientErrors(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	t.Setenv("FIRECRAWL_RETRY_BASE_DELAY", "0")
+	calls := 0
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		return jsonResponse(400, `{"message":"bad request"}`), nil
+	})
+
+	old := endpoints["search"]
+	endpoints["search"] = "https://example.test/search"
+	t.Cleanup(func() { endpoints["search"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"web", "--query", "ai"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected search failure")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
 func TestCreditUsageCommandOutputsJSON(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
@@ -113,6 +167,32 @@ func TestCreditUsageCommandOutputsJSON(t *testing.T) {
 	pretty := stdout.String()
 	if !strings.Contains(pretty, "\n  \"data\": {") || !strings.Contains(pretty, "\n    \"remainingCredits\": 1000") {
 		t.Fatalf("expected pretty JSON, got %q", pretty)
+	}
+}
+
+func TestCreditUsageCommandRetriesServerErrors(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	t.Setenv("FIRECRAWL_RETRY_BASE_DELAY", "0")
+	calls := 0
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return jsonResponse(503, `{"message":"temporary"}`), nil
+		}
+		return jsonResponse(200, `{"success":true,"data":{"remainingCredits":10}}`), nil
+	})
+
+	old := endpoints["credit-usage"]
+	endpoints["credit-usage"] = "https://example.test/team/credit-usage"
+	t.Cleanup(func() { endpoints["credit-usage"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"credit-usage"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
 	}
 }
 
@@ -285,6 +365,67 @@ func TestScrapeCommandWritesMarkdownFileToPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(content), "hello") {
+		t.Fatalf("export content = %q", string(content))
+	}
+}
+
+func TestScrapeCommandRetriesWithoutSelectorsWhenMarkdownIsEmpty(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	calls := 0
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		switch calls {
+		case 1:
+			if _, ok := payload["includeTags"]; !ok {
+				t.Fatal("first request should include includeTags")
+			}
+			if _, ok := payload["excludeTags"]; !ok {
+				t.Fatal("first request should include excludeTags")
+			}
+			return jsonResponse(200, `{"success":true,"data":{"markdown":"","metadata":{"title":"empty"}}}`), nil
+		case 2:
+			if _, ok := payload["includeTags"]; ok {
+				t.Fatalf("fallback request should omit includeTags: %#v", payload)
+			}
+			if _, ok := payload["excludeTags"]; ok {
+				t.Fatalf("fallback request should omit excludeTags: %#v", payload)
+			}
+			return jsonResponse(200, `{"success":true,"data":{"markdown":"fallback","metadata":{"title":"T"}}}`), nil
+		default:
+			t.Fatalf("unexpected request %d", calls)
+			return nil, nil
+		}
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"scrape",
+		"--output", "page",
+		"--path", dir,
+		"--url", "https://example.com",
+		"--include-tags", "article",
+		"--exclude-tags", ".nav",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "page.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "fallback") {
 		t.Fatalf("export content = %q", string(content))
 	}
 }
