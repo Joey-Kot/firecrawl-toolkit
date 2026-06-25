@@ -356,6 +356,122 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 	}
 }
 
+func TestScrapeCommandUsesHeadersFile(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want map[string]string
+	}{
+		{
+			name: "json",
+			body: `{"X-Trace-Id":"abc123","Authorization":"Bearer token"}`,
+			want: map[string]string{"X-Trace-Id": "abc123", "Authorization": "Bearer token"},
+		},
+		{
+			name: "header-string",
+			body: "GET / HTTP/2\r\n:authority: www.example.com\r\n:method: GET\r\nUser-Agent: Mozilla/5.0\r\nAccept: text/html\r\nCookie: a=1; b=2\r\n",
+			want: map[string]string{"User-Agent": "Mozilla/5.0", "Accept": "text/html", "Cookie": "a=1; b=2"},
+		},
+		{
+			name: "json-cookie-array",
+			body: `[{"domain":".reddit.com","hostOnly":false,"httpOnly":true,"name":"token_v2","path":"/","secure":true,"session":false,"value":"jwt.value"},{"domain":"www.reddit.com","hostOnly":true,"httpOnly":false,"name":"g_state","path":"/","secure":false,"session":false,"value":"{\"i_l\":0}"},{"domain":".reddit.com","hostOnly":false,"httpOnly":false,"name":"csv","path":"/","secure":true,"session":false,"value":"2"}]`,
+			want: map[string]string{"Cookie": `token_v2=jwt.value; g_state={"i_l":0}; csv=2`},
+		},
+		{
+			name: "json-header-array",
+			body: `{"headers":[{"name":"User-Agent","value":"Mozilla/5.0"},{"name":"Accept","value":"text/html"}]}`,
+			want: map[string]string{"User-Agent": "Mozilla/5.0", "Accept": "text/html"},
+		},
+		{
+			name: "json-cookies-field",
+			body: `{"cookies":[{"name":"a","value":"1"},{"name":"b","value":"2"}]}`,
+			want: map[string]string{"Cookie": "a=1; b=2"},
+		},
+		{
+			name: "netscape",
+			body: "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tFALSE\t2147483647\ta\t1\n#HttpOnly_.example.com\tTRUE\t/\tTRUE\t2147483647\tb\t2\n",
+			want: map[string]string{"Cookie": "a=1; b=2"},
+		},
+		{
+			name: "cookie-value",
+			body: "a=1; b=2",
+			want: map[string]string{"Cookie": "a=1; b=2"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(apiKeyEnv, "test-key")
+			setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Fatal(err)
+				}
+				headers := payload["headers"].(map[string]any)
+				for key, value := range tt.want {
+					if headers[key] != value {
+						t.Fatalf("headers[%q] = %#v, want %q; headers=%#v", key, headers[key], value, headers)
+					}
+				}
+				return jsonResponse(200, `{"success":true,"data":{"markdown":"ok","metadata":{"url":"https://example.com"}}}`), nil
+			})
+
+			old := endpoints["scrape"]
+			endpoints["scrape"] = "https://example.test/scrape"
+			t.Cleanup(func() { endpoints["scrape"] = old })
+
+			dir := t.TempDir()
+			headersPath := filepath.Join(dir, "headers.txt")
+			if err := os.WriteFile(headersPath, []byte(tt.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var stdout, stderr bytes.Buffer
+			err := run([]string{"scrape", "--output", "page", "--path", dir, "--url", "https://example.com", "--headers-file", headersPath}, &stdout, &stderr)
+			if err != nil {
+				t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+			}
+		})
+	}
+}
+
+func TestScrapeCommandMergesHeadersFileWithHeadersFlag(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		headers := payload["headers"].(map[string]any)
+		if headers["Cookie"] != "a=1" || headers["X-Trace-Id"] != "override" {
+			t.Fatalf("headers = %#v", headers)
+		}
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"ok","metadata":{"url":"https://example.com"}}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	dir := t.TempDir()
+	headersPath := filepath.Join(dir, "headers.txt")
+	if err := os.WriteFile(headersPath, []byte("Cookie: a=1\nX-Trace-Id: from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"scrape",
+		"--output", "page",
+		"--path", dir,
+		"--url", "https://example.com",
+		"--headers-file", headersPath,
+		"--headers", `{"X-Trace-Id":"override"}`,
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+}
+
 func TestScrapeCommandSkipTLSFlag(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
@@ -616,6 +732,18 @@ func TestValidation(t *testing.T) {
 	err = run([]string{"scrape", "--output", "x", "--url", "https://example.com", "--headers", `[]`}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "--headers") {
 		t.Fatalf("expected headers validation error, got %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	dir := t.TempDir()
+	headersPath := filepath.Join(dir, "headers.txt")
+	if err := os.WriteFile(headersPath, []byte("not a standard headers file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = run([]string{"scrape", "--output", "x", "--url", "https://example.com", "--headers-file", headersPath}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--headers-file") {
+		t.Fatalf("expected headers-file validation error, got %v", err)
 	}
 
 	stdout.Reset()

@@ -425,6 +425,22 @@ firecrawl scrape \
   --headers '{"X-Trace-Id":"abc123"}'
 ```
 
+### `--headers-file`
+
+Optional. Path to a headers file. The file is auto-detected as one of these standard formats:
+
+- JSON headers or cookies, including a plain object, `headers`/`cookies` arrays, or browser extension cookie export arrays
+- HTTP header string, for example browser-style `Name: value` lines
+- Netscape cookie file
+- Cookie header value, for example `a=1; b=2`
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --headers-file ./headers.txt
+```
+
 Use sensitive headers carefully. Avoid passing credentials, cookies, or authorization tokens unless you understand the risk.
 
 ### `--timeout`
