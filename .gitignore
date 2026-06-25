@@ -17,6 +17,3 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
-
-# Local uv-generated lockfile for this toolkit repo
-uv.lock

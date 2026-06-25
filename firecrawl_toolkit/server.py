@@ -989,6 +989,7 @@ async def firecrawl_scrape(
     includeTags: Optional[List[str]] = None,
     maxCharacters: Optional[int] = None,
     emptyTags: bool = False,
+    skipTls: bool = False,
     headers: Optional[Dict[str, str]] = None,
     startIndex: Optional[int] = 0,
 ) -> str:
@@ -1001,6 +1002,7 @@ async def firecrawl_scrape(
         maxCharacters: Maximum number of markdown characters to return from startIndex. Defaults to no truncation. Invalid values (non-integer or <= 0) are ignored. Optional.
         startIndex: Starting index for markdown truncation. Defaults to 0. Invalid values (non-integer or < 0) are treated as 0. Optional.
         emptyTags: Whether to clear the built-in excludeTags. When True, only user-provided excludeTags are kept. Optional.
+        skipTls: Whether to skip TLS certificate verification for the upstream scrape target. Defaults to False. Optional.
         headers: Root-level request headers. Forwarded to the upstream scrape request only when a non-empty dictionary is provided. Optional.
     Returns:
         JSON string.
@@ -1026,7 +1028,7 @@ async def firecrawl_scrape(
         "maxAge": 172800000,
         "waitFor": 0,
         "mobile": False,
-        "skipTlsVerification": True,
+        "skipTlsVerification": bool(skipTls),
         "timeout": 30000,
         "parsers": ["pdf"],
         "removeBase64Images": True,

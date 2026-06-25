@@ -282,6 +282,9 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		if payload["timeout"] != float64(7000) {
 			t.Fatalf("timeout = %#v", payload["timeout"])
 		}
+		if payload["skipTlsVerification"] != false {
+			t.Fatalf("skipTlsVerification = %#v", payload["skipTlsVerification"])
+		}
 		if _, ok := payload["startIndex"]; ok {
 			t.Fatal("startIndex must not be forwarded upstream")
 		}
@@ -350,6 +353,45 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("export content missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestScrapeCommandSkipTLSFlag(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["skipTlsVerification"] != true {
+			t.Fatalf("skipTlsVerification = %#v", payload["skipTlsVerification"])
+		}
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"ok","metadata":{"title":"T"}}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	dir := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{
+		"scrape",
+		"--output", "page",
+		"--url", "https://example.com",
+		"--skip-tls",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
 	}
 }
 
@@ -499,7 +541,7 @@ func TestScrapeCommandCreatesPathBeforeRequest(t *testing.T) {
 }
 
 func TestBuildScrapePayloadEmptyTags(t *testing.T) {
-	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil, defaultTimeoutSecs)
+	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil, defaultTimeoutSecs, false)
 	excludeTags := payload["excludeTags"].([]string)
 	if strings.Join(excludeTags, ",") != ".nav,script" {
 		t.Fatalf("excludeTags = %#v", excludeTags)
@@ -508,13 +550,13 @@ func TestBuildScrapePayloadEmptyTags(t *testing.T) {
 		t.Fatalf("timeout = %#v", payload["timeout"])
 	}
 
-	payload = buildScrapePayload("https://example.com", nil, nil, true, nil, defaultTimeoutSecs)
+	payload = buildScrapePayload("https://example.com", nil, nil, true, nil, defaultTimeoutSecs, false)
 	excludeTags = payload["excludeTags"].([]string)
 	if len(excludeTags) != 0 {
 		t.Fatalf("excludeTags = %#v", excludeTags)
 	}
 
-	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil, defaultTimeoutSecs)
+	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil, defaultTimeoutSecs, false)
 	excludeTags = payload["excludeTags"].([]string)
 	if !containsString(excludeTags, "script") || !containsString(excludeTags, ".nav") {
 		t.Fatalf("excludeTags should include built-in and user selectors, got %#v", excludeTags)

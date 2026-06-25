@@ -401,6 +401,19 @@ firecrawl scrape \
   --exclude-tags ".nav"
 ```
 
+### `--skip-tls`
+
+Optional. Skip TLS certificate verification for the upstream scrape target.
+
+By default, TLS certificate verification is enabled.
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --skip-tls
+```
+
 ### `--headers`
 
 Optional. JSON object of request headers.

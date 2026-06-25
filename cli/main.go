@@ -181,6 +181,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	var includeTags string
 	var excludeTags string
 	var emptyTags bool
+	var skipTLS bool
 	var headersRaw string
 	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md.")
@@ -189,6 +190,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.StringVar(&includeTags, "include-tags", "", "CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.StringVar(&excludeTags, "exclude-tags", "", "Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.BoolVar(&emptyTags, "empty-tags", false, "Clear the built-in exclude selector list while keeping user-provided --exclude-tags.")
+	fs.BoolVar(&skipTLS, "skip-tls", false, "Skip TLS certificate verification for the upstream scrape target. Optional. Default is false.")
 	fs.StringVar(&headersRaw, "headers", "", `Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.`)
 	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printScrapeUsage(stderr) }
@@ -225,7 +227,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		return cliError{message: err.Error(), code: 1}
 	}
 
-	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers, timeoutSecs)
+	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers, timeoutSecs, skipTLS)
 	raw, err := firecrawlPost("scrape", payload, timeoutSecs)
 	if err != nil {
 		fmt.Fprintln(stdout, "false")
@@ -327,7 +329,7 @@ func buildSearchPayload(query string, country string, limit int, sourceNames []s
 	}
 }
 
-func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, emptyTags bool, headers map[string]string, timeoutSecs int) map[string]any {
+func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, emptyTags bool, headers map[string]string, timeoutSecs int, skipTLS bool) map[string]any {
 	baseExcludeTags := defaultScrapeExcludeTags()
 	if emptyTags {
 		baseExcludeTags = nil
@@ -342,7 +344,7 @@ func buildScrapePayload(targetURL string, includeTags []string, excludeTags []st
 		"maxAge":              172800000,
 		"waitFor":             0,
 		"mobile":              false,
-		"skipTlsVerification": true,
+		"skipTlsVerification": skipTLS,
 		"timeout":             timeoutMillis,
 		"parsers":             []string{"pdf"},
 		"removeBase64Images":  true,
@@ -993,7 +995,7 @@ func printRootUsage(w io.Writer) {
   firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
   firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
   firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
-  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--headers <json-object>] [--timeout <seconds>]
+  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--skip-tls] [--headers <json-object>] [--timeout <seconds>]
   firecrawl credit-usage [--json] [--pretty]
 
 The API key is read from FIRECRAWL_KEY.
@@ -1021,7 +1023,7 @@ Output:
 
 func printScrapeUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--headers <json-object>] [--timeout <seconds>]
+  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--skip-tls] [--headers <json-object>] [--timeout <seconds>]
 
 Parameters:
   --output          Export name. Required. The result is saved as <output>.md.
@@ -1030,6 +1032,7 @@ Parameters:
   --include-tags    CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.
   --exclude-tags    Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.
   --empty-tags      Clear the built-in exclude selector list while keeping user-provided --exclude-tags.
+  --skip-tls        Skip TLS certificate verification for the upstream scrape target. Optional. Default is false.
   --headers         Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.
   --timeout         Request timeout in seconds. Optional. Must be > 0. Default is 120.
 

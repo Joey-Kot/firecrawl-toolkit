@@ -486,6 +486,47 @@ class ResponseTransformTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), 1)
         self.assertNotIn("headers", calls[0])
 
+    async def test_scrape_skip_tls_defaults_to_false(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(url="https://example.com")
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0]["skipTlsVerification"], False)
+
+    async def test_scrape_skip_tls_can_be_enabled(self):
+        calls = []
+
+        async def fake_execute(_api_url, payload, _api_name):
+            calls.append(payload)
+            return {"success": True, "data": {"markdown": "ok", "metadata": {}}}
+
+        old_execute = server.execute_firecrawl_request
+        server.execute_firecrawl_request = fake_execute
+        try:
+            out = await server.firecrawl_scrape(
+                url="https://example.com",
+                skipTls=True,
+            )
+        finally:
+            server.execute_firecrawl_request = old_execute
+
+        parsed = json.loads(out)
+        self.assertEqual(parsed["success"], True)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0]["skipTlsVerification"], True)
+
     async def test_scrape_empty_markdown_triggers_fallback_without_tag_keys(self):
         calls = []
 
