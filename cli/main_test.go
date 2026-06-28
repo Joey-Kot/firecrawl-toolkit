@@ -449,7 +449,7 @@ func TestRootUsageIncludesAVScrapeTimeout(t *testing.T) {
 	usage := stdout.String()
 	for _, want := range []string{
 		"firecrawl scholar    --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>]",
-		"firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--no-scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]",
+		"firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]",
 		"firecrawl audio-scrape --url <url> [--timeout <seconds>]",
 		"firecrawl video-scrape --url <url> [--timeout <seconds>]",
 	} {
@@ -848,17 +848,8 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		if _, ok := payload["maxCharacters"]; ok {
 			t.Fatal("maxCharacters must not be forwarded upstream")
 		}
-		actions := payload["actions"].([]any)
-		if len(actions) != 2 {
-			t.Fatalf("actions = %#v", actions)
-		}
-		waitAction := actions[0].(map[string]any)
-		if waitAction["type"] != "wait" || waitAction["milliseconds"] != float64(2) {
-			t.Fatalf("wait action = %#v", waitAction)
-		}
-		scrollAction := actions[1].(map[string]any)
-		if scrollAction["type"] != "scroll" || scrollAction["direction"] != "down" || scrollAction["selector"] != "body" {
-			t.Fatalf("scroll action = %#v", scrollAction)
+		if _, ok := payload["actions"]; ok {
+			t.Fatalf("actions should be omitted by default: %#v", payload["actions"])
 		}
 		includeTags := payload["includeTags"].([]any)
 		if len(includeTags) != 2 || includeTags[0] != "article" || includeTags[1] != ".content" {
@@ -1080,15 +1071,24 @@ func TestScrapeCommandSkipTLSFlag(t *testing.T) {
 	}
 }
 
-func TestScrapeCommandNoScrollFlag(t *testing.T) {
+func TestScrapeCommandScrollFlag(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := payload["actions"]; ok {
-			t.Fatalf("actions should be omitted with --no-scroll: %#v", payload["actions"])
+		actions := payload["actions"].([]any)
+		if len(actions) != 2 {
+			t.Fatalf("actions = %#v", actions)
+		}
+		waitAction := actions[0].(map[string]any)
+		if waitAction["type"] != "wait" || waitAction["milliseconds"] != float64(2) {
+			t.Fatalf("wait action = %#v", waitAction)
+		}
+		scrollAction := actions[1].(map[string]any)
+		if scrollAction["type"] != "scroll" || scrollAction["direction"] != "down" || scrollAction["selector"] != "body" {
+			t.Fatalf("scroll action = %#v", scrollAction)
 		}
 		return jsonResponse(200, `{"success":true,"data":{"markdown":"ok","metadata":{"title":"T"}}}`), nil
 	})
@@ -1104,7 +1104,7 @@ func TestScrapeCommandNoScrollFlag(t *testing.T) {
 		"--output", "page",
 		"--path", dir,
 		"--url", "https://example.com",
-		"--no-scroll",
+		"--scroll",
 	}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
@@ -1265,7 +1265,12 @@ func TestBuildScrapePayloadEmptyTags(t *testing.T) {
 	if payload["timeout"] != int64(120000) {
 		t.Fatalf("timeout = %#v", payload["timeout"])
 	}
-	actions := payload["actions"].([]map[string]any)
+	if _, ok := payload["actions"]; ok {
+		t.Fatalf("actions should be omitted by default: %#v", payload["actions"])
+	}
+
+	payloadWithScroll := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil, defaultTimeoutSecs, false, true)
+	actions := payloadWithScroll["actions"].([]map[string]any)
 	if len(actions) != 2 {
 		t.Fatalf("actions = %#v", actions)
 	}
@@ -1276,13 +1281,13 @@ func TestBuildScrapePayloadEmptyTags(t *testing.T) {
 		t.Fatalf("scroll action = %#v", actions[1])
 	}
 
-	payload = buildScrapePayload("https://example.com", nil, nil, true, nil, defaultTimeoutSecs, false, true)
+	payload = buildScrapePayload("https://example.com", nil, nil, true, nil, defaultTimeoutSecs, false, false)
 	excludeTags = payload["excludeTags"].([]string)
 	if len(excludeTags) != 0 {
 		t.Fatalf("excludeTags = %#v", excludeTags)
 	}
 	if _, ok := payload["actions"]; ok {
-		t.Fatalf("actions should be omitted with noScroll=true: %#v", payload["actions"])
+		t.Fatalf("actions should be omitted with scroll=false: %#v", payload["actions"])
 	}
 
 	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil, defaultTimeoutSecs, false, false)

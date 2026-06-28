@@ -136,7 +136,7 @@ It reduces common non-content regions such as:
 
 This is not meant to aggressively delete every non-article element. The priority is **high recall with reduced noise**: keep the source material useful for local search while removing obvious boilerplate.
 
-The scrape command also runs a short default wait and page scroll before extraction, so lazy-loaded content has a chance to appear. Use `--no-scroll` to disable those actions.
+Use `--scroll` when a page needs a short wait and body scroll before extraction, so lazy-loaded content has a chance to appear.
 
 If a page contains useful content in an unusual region, you can disable the built-in filter:
 
@@ -407,11 +407,11 @@ firecrawl scrape \
   --exclude-tags ".nav"
 ```
 
-### `--no-scroll`
+### `--scroll`
 
-Optional. Disable the default wait and scroll actions before scraping.
+Optional. Enable wait and scroll actions before scraping.
 
-By default, scrape sends these actions in the request payload:
+When enabled, scrape sends these actions in the request payload:
 
 ```json
 [
@@ -427,13 +427,13 @@ By default, scrape sends these actions in the request payload:
 ]
 ```
 
-Use `--no-scroll` when a page should be captured without the extra interaction:
+Use `--scroll` when a page needs the extra interaction:
 
 ```bash
 firecrawl scrape \
   --url "https://example.com" \
   --output page \
-  --no-scroll
+  --scroll
 ```
 
 ### `--skip-tls`
