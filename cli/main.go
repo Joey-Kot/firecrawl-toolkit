@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,7 +40,9 @@ var (
 	httpClient = &http.Client{Timeout: 30 * time.Second}
 	endpoints  = map[string]string{
 		"search":       joinEndpoint(defaultBaseURL, "search"),
+		"scholar":      joinEndpoint(defaultBaseURL, "search/research/papers"),
 		"scrape":       joinEndpoint(defaultBaseURL, "scrape"),
+		"parse":        joinEndpoint(defaultBaseURL, "parse"),
 		"credit-usage": joinEndpoint(defaultBaseURL, "team/credit-usage"),
 	}
 	countryAliases = loadCountryAliases()
@@ -83,8 +86,16 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 		return runSearch("news", []string{"news"}, args[1:], stdout, stderr)
 	case "image":
 		return runSearch("image", []string{"images"}, args[1:], stdout, stderr)
+	case "scholar":
+		return runScholar(args[1:], stdout, stderr)
 	case "scrape":
 		return runScrape(args[1:], stdout, stderr)
+	case "parse":
+		return runParse(args[1:], stdout, stderr)
+	case "audio-scrape":
+		return runAudioScrape(args[1:], stdout, stderr)
+	case "video-scrape":
+		return runVideoScrape(args[1:], stdout, stderr)
 	case "credit-usage":
 		return runCreditUsage(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
@@ -172,6 +183,63 @@ func runSearch(name string, sources []string, args []string, stdout io.Writer, s
 	return nil
 }
 
+func runScholar(args []string, stdout io.Writer, stderr io.Writer) error {
+	fs := flag.NewFlagSet("scholar", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var query string
+	var categories string
+	var timeFrom string
+	var timeTo string
+	searchNum := 5
+	timeoutSecs := defaultTimeoutSecs
+	fs.StringVar(&query, "query", "", "Research paper search keywords. Required.")
+	fs.IntVar(&searchNum, "search-num", 5, "Number of papers to return. Optional. Range: 1-500. Default is 5.")
+	fs.StringVar(&categories, "categories", "", "Comma-separated paper category filters. Optional. All filters must match.")
+	fs.StringVar(&timeFrom, "time-from", "", "Inclusive created/updated date lower bound. Optional.")
+	fs.StringVar(&timeTo, "time-to", "", "Inclusive created/updated date upper bound. Optional.")
+	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
+	fs.Usage = func() { printScholarUsage(stderr) }
+	if err := fs.Parse(args); err != nil {
+		return cliError{code: 2}
+	}
+	if strings.TrimSpace(query) == "" {
+		fs.Usage()
+		return cliError{message: "--query is required", code: 2}
+	}
+	if fs.NArg() > 0 {
+		return cliError{message: fmt.Sprintf("unexpected positional arguments: %s", strings.Join(fs.Args(), " ")), code: 2}
+	}
+	if searchNum < 1 || searchNum > 500 {
+		return cliError{message: "--search-num must be an integer from 1 to 500", code: 2}
+	}
+	if err := validateTimeoutSecs(timeoutSecs); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
+
+	raw, err := firecrawlGetWithJSONBodyWithRetry("scholar", buildScholarQuery(query, searchNum, categories, timeFrom, timeTo), buildTimeoutPayload(timeoutSecs), timeoutSecs)
+	if err != nil {
+		out := compactJSON(map[string]any{
+			"success": false,
+			"error":   true,
+			"message": err.Error(),
+		})
+		fmt.Fprintln(stdout, out)
+		return cliError{code: 1}
+	}
+	if success, ok := raw["success"].(bool); ok && !success {
+		out := compactJSON(map[string]any{
+			"success":  false,
+			"error":    true,
+			"message":  "scholar request failed, upstream returned success=false",
+			"upstream": raw,
+		})
+		fmt.Fprintln(stdout, out)
+		return cliError{code: 1}
+	}
+	fmt.Fprintln(stdout, compactJSON(transformScholarResult(raw)))
+	return nil
+}
+
 func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs := flag.NewFlagSet("scrape", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -181,6 +249,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	var includeTags string
 	var excludeTags string
 	var emptyTags bool
+	var noScroll bool
 	var skipTLS bool
 	var headersRaw string
 	var headersFile string
@@ -191,6 +260,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.StringVar(&includeTags, "include-tags", "", "CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.StringVar(&excludeTags, "exclude-tags", "", "Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.")
 	fs.BoolVar(&emptyTags, "empty-tags", false, "Clear the built-in exclude selector list while keeping user-provided --exclude-tags.")
+	fs.BoolVar(&noScroll, "no-scroll", false, "Disable the default wait and scroll actions before scraping.")
 	fs.BoolVar(&skipTLS, "skip-tls", false, "Skip TLS certificate verification for the upstream scrape target. Optional. Default is false.")
 	fs.StringVar(&headersRaw, "headers", "", `Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.`)
 	fs.StringVar(&headersFile, "headers-file", "", "Path to a headers file. Supports JSON headers/cookies, HTTP header string, Netscape cookies, or Cookie header value.")
@@ -234,7 +304,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		return cliError{message: err.Error(), code: 1}
 	}
 
-	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers, timeoutSecs, skipTLS)
+	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers, timeoutSecs, skipTLS, noScroll)
 	raw, err := firecrawlPost("scrape", payload, timeoutSecs)
 	if err != nil {
 		fmt.Fprintln(stdout, "false")
@@ -270,6 +340,157 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		return cliError{code: 1}
 	}
 	fmt.Fprintln(stdout, "true")
+	return nil
+}
+
+func runParse(args []string, stdout io.Writer, stderr io.Writer) error {
+	fs := flag.NewFlagSet("parse", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var output string
+	var outputDir string
+	var targetURL string
+	var filePath string
+	var skipTLS bool
+	timeoutSecs := defaultTimeoutSecs
+	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md.")
+	fs.StringVar(&outputDir, "path", "", "Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.")
+	fs.StringVar(&targetURL, "url", "", "Target document URL. Required unless --file is provided.")
+	fs.StringVar(&filePath, "file", "", "Local document file. Required unless --url is provided.")
+	fs.BoolVar(&skipTLS, "skip-tls", false, "Skip TLS certificate verification for URL parsing. Optional. Default is false.")
+	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
+	fs.Usage = func() { printParseUsage(stderr) }
+	if err := fs.Parse(args); err != nil {
+		return cliError{code: 2}
+	}
+	if strings.TrimSpace(output) == "" {
+		fs.Usage()
+		return cliError{message: "--output is required", code: 2}
+	}
+	targetURL = strings.TrimSpace(targetURL)
+	filePath = strings.TrimSpace(filePath)
+	hasURL := targetURL != ""
+	hasFile := filePath != ""
+	if hasURL == hasFile {
+		fs.Usage()
+		if hasURL {
+			return cliError{message: "only one of --url or --file may be provided", code: 2}
+		}
+		return cliError{message: "one of --url or --file is required", code: 2}
+	}
+	if fs.NArg() > 0 {
+		return cliError{message: fmt.Sprintf("unexpected positional arguments: %s", strings.Join(fs.Args(), " ")), code: 2}
+	}
+	if err := validateTimeoutSecs(timeoutSecs); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
+	if hasFile {
+		if err := validateParseFile(filePath); err != nil {
+			return cliError{message: err.Error(), code: 2}
+		}
+	}
+	if err := ensureOutputDir(outputDir); err != nil {
+		return cliError{message: err.Error(), code: 1}
+	}
+
+	var raw map[string]any
+	var err error
+	if hasFile {
+		raw, err = firecrawlPostMultipartFile("parse", filePath, buildParseFileOptions(timeoutSecs), timeoutSecs)
+	} else {
+		raw, err = firecrawlPost("scrape", buildParseURLPayload(targetURL, timeoutSecs, skipTLS), timeoutSecs)
+	}
+	if err != nil {
+		fmt.Fprintln(stdout, "false")
+		fmt.Fprintln(stdout, err.Error())
+		return cliError{code: 1}
+	}
+	if success, ok := raw["success"].(bool); ok && !success {
+		fmt.Fprintln(stdout, "false")
+		fmt.Fprintln(stdout, scrapeErrorReason(raw))
+		return cliError{code: 1}
+	}
+	data, ok := raw["data"].(map[string]any)
+	if !ok {
+		fmt.Fprintln(stdout, "false")
+		fmt.Fprintln(stdout, "parse request failed, upstream response is missing data object")
+		return cliError{code: 1}
+	}
+
+	result := transformParseResult(raw, data, targetURL)
+	path := outputPath(output, outputDir)
+	if err := os.WriteFile(path, []byte(renderParseMarkdownFile(result)), 0o644); err != nil {
+		fmt.Fprintln(stdout, "false")
+		fmt.Fprintln(stdout, err.Error())
+		return cliError{code: 1}
+	}
+	fmt.Fprintln(stdout, "true")
+	return nil
+}
+
+func runAudioScrape(args []string, stdout io.Writer, stderr io.Writer) error {
+	return runAVScrape("audio-scrape", "audio", args, stdout, stderr)
+}
+
+func runVideoScrape(args []string, stdout io.Writer, stderr io.Writer) error {
+	return runAVScrape("video-scrape", "video", args, stdout, stderr)
+}
+
+func runAVScrape(commandName string, format string, args []string, stdout io.Writer, stderr io.Writer) error {
+	fs := flag.NewFlagSet(commandName, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var targetURL string
+	timeoutSecs := defaultTimeoutSecs
+	fs.StringVar(&targetURL, "url", "", "Target audio/video webpage URL. Required.")
+	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
+	fs.Usage = func() { printAVScrapeUsage(stderr, commandName, format) }
+	if err := fs.Parse(args); err != nil {
+		return cliError{code: 2}
+	}
+	if strings.TrimSpace(targetURL) == "" {
+		fs.Usage()
+		return cliError{message: "--url is required", code: 2}
+	}
+	if fs.NArg() > 0 {
+		return cliError{message: fmt.Sprintf("unexpected positional arguments: %s", strings.Join(fs.Args(), " ")), code: 2}
+	}
+	if err := validateTimeoutSecs(timeoutSecs); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
+
+	payload := buildAVScrapePayload(targetURL, format, timeoutSecs)
+	raw, err := firecrawlPost("scrape", payload, timeoutSecs)
+	if err != nil {
+		out := compactJSON(map[string]any{
+			"success": false,
+			"error":   true,
+			"message": err.Error(),
+		})
+		fmt.Fprintln(stdout, out)
+		return cliError{code: 1}
+	}
+	if success, ok := raw["success"].(bool); ok && !success {
+		out := compactJSON(map[string]any{
+			"success":  false,
+			"error":    true,
+			"message":  commandName + " request failed, upstream returned success=false",
+			"upstream": raw,
+		})
+		fmt.Fprintln(stdout, out)
+		return cliError{code: 1}
+	}
+	data, ok := raw["data"].(map[string]any)
+	if !ok {
+		out := compactJSON(map[string]any{
+			"success":  false,
+			"error":    true,
+			"message":  commandName + " request failed, upstream response is missing data object",
+			"upstream": raw,
+		})
+		fmt.Fprintln(stdout, out)
+		return cliError{code: 1}
+	}
+
+	fmt.Fprintln(stdout, compactJSON(transformAVScrapeResult(raw, data, format)))
 	return nil
 }
 
@@ -336,7 +557,29 @@ func buildSearchPayload(query string, country string, limit int, sourceNames []s
 	}
 }
 
-func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, emptyTags bool, headers map[string]string, timeoutSecs int, skipTLS bool) map[string]any {
+func buildScholarQuery(query string, searchNum int, categories string, timeFrom string, timeTo string) url.Values {
+	values := url.Values{}
+	values.Set("query", strings.TrimSpace(query))
+	values.Set("k", strconv.Itoa(searchNum))
+	if strings.TrimSpace(categories) != "" {
+		values.Set("categories", strings.TrimSpace(categories))
+	}
+	if strings.TrimSpace(timeFrom) != "" {
+		values.Set("from", strings.TrimSpace(timeFrom))
+	}
+	if strings.TrimSpace(timeTo) != "" {
+		values.Set("to", strings.TrimSpace(timeTo))
+	}
+	return values
+}
+
+func buildTimeoutPayload(timeoutSecs int) map[string]any {
+	return map[string]any{
+		"timeout": timeoutMilliseconds(timeoutSecs),
+	}
+}
+
+func buildScrapePayload(targetURL string, includeTags []string, excludeTags []string, emptyTags bool, headers map[string]string, timeoutSecs int, skipTLS bool, noScroll bool) map[string]any {
 	baseExcludeTags := defaultScrapeExcludeTags()
 	if emptyTags {
 		baseExcludeTags = nil
@@ -359,6 +602,19 @@ func buildScrapePayload(targetURL string, includeTags []string, excludeTags []st
 		"proxy":               "auto",
 		"storeInCache":        true,
 	}
+	if !noScroll {
+		payload["actions"] = []map[string]any{
+			{
+				"type":         "wait",
+				"milliseconds": 2,
+			},
+			{
+				"type":      "scroll",
+				"direction": "down",
+				"selector":  "body",
+			},
+		}
+	}
 	if includeTags != nil {
 		payload["includeTags"] = includeTags
 	}
@@ -366,6 +622,34 @@ func buildScrapePayload(targetURL string, includeTags []string, excludeTags []st
 		payload["headers"] = headers
 	}
 	return payload
+}
+
+func buildParseURLPayload(targetURL string, timeoutSecs int, skipTLS bool) map[string]any {
+	return map[string]any{
+		"url":                 targetURL,
+		"formats":             []string{"markdown"},
+		"parsers":             []string{"pdf"},
+		"removeBase64Images":  false,
+		"skipTlsVerification": skipTLS,
+		"timeout":             timeoutMilliseconds(timeoutSecs),
+	}
+}
+
+func buildParseFileOptions(timeoutSecs int) map[string]any {
+	return map[string]any{
+		"formats":            []string{"markdown"},
+		"parsers":            []string{"pdf"},
+		"removeBase64Images": false,
+		"timeout":            timeoutMilliseconds(timeoutSecs),
+	}
+}
+
+func buildAVScrapePayload(targetURL string, format string, timeoutSecs int) map[string]any {
+	return map[string]any{
+		"url":     targetURL,
+		"formats": []string{format},
+		"timeout": timeoutMilliseconds(timeoutSecs),
+	}
 }
 
 func parseAPIKeys(value string) []string {
@@ -421,6 +705,45 @@ func firecrawlGetWithRetry(endpointName string) (map[string]any, error) {
 	})
 }
 
+func firecrawlGetWithJSONBody(endpointName string, query url.Values, payload map[string]any, timeoutSecs int) (map[string]any, error) {
+	key, err := apiKeyFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	endpoint := endpointURL(endpointName)
+	if len(query) > 0 {
+		separator := "?"
+		if strings.Contains(endpoint, "?") {
+			separator = "&"
+		}
+		endpoint += separator + query.Encode()
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodGet, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
+	client := clientWithTimeout(timeoutSecs)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
+	}
+	defer resp.Body.Close()
+	return parseFirecrawlResponse(endpointName, resp)
+}
+
+func firecrawlGetWithJSONBodyWithRetry(endpointName string, query url.Values, payload map[string]any, timeoutSecs int) (map[string]any, error) {
+	return firecrawlWithRetry(func() (map[string]any, error) {
+		return firecrawlGetWithJSONBody(endpointName, query, payload, timeoutSecs)
+	})
+}
+
 func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int) (map[string]any, error) {
 	key, err := apiKeyFromEnv()
 	if err != nil {
@@ -437,6 +760,54 @@ func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int)
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
+	client := clientWithTimeout(timeoutSecs)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
+	}
+	defer resp.Body.Close()
+	return parseFirecrawlResponse(endpointName, resp)
+}
+
+func firecrawlPostMultipartFile(endpointName string, filePath string, options map[string]any, timeoutSecs int) (map[string]any, error) {
+	key, err := apiKeyFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return nil, err
+	}
+	optionsJSON, err := json.Marshal(options)
+	if err != nil {
+		return nil, err
+	}
+	if err := writer.WriteField("options", string(optionsJSON)); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	endpoint := endpointURL(endpointName)
+	req, err := http.NewRequest(http.MethodPost, endpoint, &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
 	client := clientWithTimeout(timeoutSecs)
 	resp, err := client.Do(req)
@@ -479,8 +850,12 @@ func endpointURL(endpointName string) string {
 	switch endpointName {
 	case "search":
 		return joinEndpoint(baseURL, "search")
+	case "scholar":
+		return joinEndpoint(baseURL, "search/research/papers")
 	case "scrape":
 		return joinEndpoint(baseURL, "scrape")
+	case "parse":
+		return joinEndpoint(baseURL, "parse")
 	case "credit-usage":
 		return joinEndpoint(baseURL, "team/credit-usage")
 	default:
@@ -502,12 +877,46 @@ func validateTimeoutSecs(timeoutSecs int) error {
 	return nil
 }
 
+func flagProvided(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 func timeoutDuration(timeoutSecs int) time.Duration {
 	return time.Duration(timeoutSecs) * time.Second
 }
 
 func timeoutMilliseconds(timeoutSecs int) int64 {
 	return int64(timeoutSecs) * 1000
+}
+
+func validateParseFile(filePath string) error {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if !supportedParseFileExt(ext) {
+		return fmt.Errorf("--file extension must be one of: .html, .htm, .pdf, .docx, .doc, .odt, .rtf, .xlsx, .xls")
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("--file must be a regular file")
+	}
+	return nil
+}
+
+func supportedParseFileExt(ext string) bool {
+	switch ext {
+	case ".html", ".htm", ".pdf", ".docx", ".doc", ".odt", ".rtf", ".xlsx", ".xls":
+		return true
+	default:
+		return false
+	}
 }
 
 func clientWithTimeout(timeoutSecs int) *http.Client {
@@ -615,14 +1024,18 @@ func transformSearchResult(raw map[string]any, data map[string]any) map[string]a
 	}
 }
 
+func transformScholarResult(raw map[string]any) map[string]any {
+	return map[string]any{
+		"success": raw["success"],
+		"data": map[string]any{
+			"scholar": mapItems(raw["results"], []string{"title", "abstract", "paperId", "primaryId", "score"}),
+		},
+	}
+}
+
 func transformScrapeResult(raw map[string]any, data map[string]any, targetURL string) map[string]any {
 	metadata, _ := data["metadata"].(map[string]any)
 	markdown, _ := data["markdown"].(string)
-	decodedMarkdown := markdown
-	if decoded, err := url.PathUnescape(markdown); err == nil {
-		decodedMarkdown = decoded
-	}
-	decodedMarkdown = strings.ReplaceAll(decodedMarkdown, `\n`, "\n")
 
 	return map[string]any{
 		"success":     raw["success"],
@@ -631,8 +1044,72 @@ func transformScrapeResult(raw map[string]any, data map[string]any, targetURL st
 		"description": valueOrNil(metadata, "description"),
 		"url":         scrapeURL(metadata, targetURL),
 		"language":    valueOrNil(metadata, "language"),
-		"markdown":    decodedMarkdown,
+		"markdown":    decodeMarkdownContent(markdown),
 		"creditsUsed": valueOrNil(metadata, "creditsUsed"),
+	}
+}
+
+func transformParseResult(raw map[string]any, data map[string]any, targetURL string) map[string]any {
+	metadata, _ := data["metadata"].(map[string]any)
+	markdown, _ := data["markdown"].(string)
+	creditsUsed := valueOrNil(metadata, "creditsUsed")
+	if creditsUsed == nil {
+		creditsUsed = valueOrNil(raw, "creditsUsed")
+	}
+	return map[string]any{
+		"title":       valueOrNil(metadata, "title"),
+		"url":         scrapeURL(metadata, targetURL),
+		"language":    valueOrNil(metadata, "language"),
+		"creditsUsed": creditsUsed,
+		"markdown":    decodeMarkdownContent(markdown),
+	}
+}
+
+func decodeMarkdownContent(markdown string) string {
+	decodedMarkdown := markdown
+	if decoded, err := url.PathUnescape(markdown); err == nil {
+		decodedMarkdown = decoded
+	}
+	return strings.ReplaceAll(decodedMarkdown, `\n`, "\n")
+}
+
+type audioScrapeResult struct {
+	CreditsUsed any `json:"creditsUsed"`
+	Title       any `json:"title"`
+	Description any `json:"description"`
+	Audio       any `json:"audio"`
+	Success     any `json:"success"`
+}
+
+type videoScrapeResult struct {
+	CreditsUsed any `json:"creditsUsed"`
+	Title       any `json:"title"`
+	Description any `json:"description"`
+	Video       any `json:"video"`
+	Success     any `json:"success"`
+}
+
+func transformAVScrapeResult(raw map[string]any, data map[string]any, format string) any {
+	metadata, _ := data["metadata"].(map[string]any)
+	creditsUsed := valueOrNil(metadata, "creditsUsed")
+	if creditsUsed == nil {
+		creditsUsed = valueOrNil(raw, "creditsUsed")
+	}
+	if format == "video" {
+		return videoScrapeResult{
+			CreditsUsed: creditsUsed,
+			Title:       valueOrNil(metadata, "title"),
+			Description: valueOrNil(metadata, "description"),
+			Video:       valueOrNil(data, "video"),
+			Success:     valueOrNil(raw, "success"),
+		}
+	}
+	return audioScrapeResult{
+		CreditsUsed: creditsUsed,
+		Title:       valueOrNil(metadata, "title"),
+		Description: valueOrNil(metadata, "description"),
+		Audio:       valueOrNil(data, "audio"),
+		Success:     valueOrNil(raw, "success"),
 	}
 }
 
@@ -708,25 +1185,32 @@ func compactJSON(payload any) string {
 }
 
 func formatJSON(payload any, pretty bool) string {
-	var (
-		out []byte
-		err error
-	)
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
 	if pretty {
-		out, err = json.MarshalIndent(payload, "", "  ")
-	} else {
-		out, err = json.Marshal(payload)
+		encoder.SetIndent("", "  ")
 	}
-	if err != nil {
+	if err := encoder.Encode(payload); err != nil {
 		return `{"success":false,"error":true,"message":"failed to encode JSON"}`
 	}
-	return string(out)
+	return strings.TrimSuffix(out.String(), "\n")
 }
 
 func renderMarkdownFile(result map[string]any) string {
 	return fmt.Sprintf("## title: %s\n## description: %s\n## url: %s\n## language: %s\n## creditsUsed: %s\n\n---\n\n%s\n",
 		stringValue(result["title"]),
 		stringValue(result["description"]),
+		stringValue(result["url"]),
+		stringValue(result["language"]),
+		stringValue(result["creditsUsed"]),
+		stringValue(result["markdown"]),
+	)
+}
+
+func renderParseMarkdownFile(result map[string]any) string {
+	return fmt.Sprintf("## title: %s\n## url: %s\n## language: %s\n## creditsUsed: %s\n\n%s\n",
+		stringValue(result["title"]),
 		stringValue(result["url"]),
 		stringValue(result["language"]),
 		stringValue(result["creditsUsed"]),
@@ -1324,13 +1808,68 @@ func printRootUsage(w io.Writer) {
   firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
   firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
   firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
-  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]
+  firecrawl scholar    --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>]
+  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--no-scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]
+  firecrawl parse      (--url <url> | --file <file>) --output <name> [--path <dir>] [--skip-tls] [--timeout <seconds>]
+  firecrawl audio-scrape --url <url> [--timeout <seconds>]
+  firecrawl video-scrape --url <url> [--timeout <seconds>]
   firecrawl credit-usage [--json] [--pretty]
 
 The API key is read from FIRECRAWL_KEY.
 The optional API base URL is read from FIRECRAWL_BASE_URL and defaults to https://api.firecrawl.dev/v2.
 
 `)
+}
+
+func printScholarUsage(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  firecrawl scholar --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>]
+
+Parameters:
+  --query       Research paper search keywords. Required. Minimum length is 1.
+  --search-num  Number of papers to return. Optional. Legal range: 1-500. Default is 5.
+  --categories  Comma-separated paper category filters. Optional. All filters must match.
+  --time-from   Inclusive created/updated date lower bound. Optional. Format: yyyy-MM-dd, for example 2000-05-28.
+  --time-to     Inclusive created/updated date upper bound. Optional. Format: yyyy-MM-dd, for example 2026-06-28.
+  --timeout     Request timeout in seconds. Optional. Must be > 0. Default is 120.
+
+Output:
+  Compact single-line JSON with success and data.scholar.
+
+`)
+}
+
+func printParseUsage(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  firecrawl parse (--url <url> | --file <file>) --output <name> [--path <dir>] [--skip-tls] [--timeout <seconds>]
+
+Parameters:
+  --url       Target document URL. Required unless --file is provided.
+  --file      Local document file. Required unless --url is provided. Supported extensions: .html, .htm, .pdf, .docx, .doc, .odt, .rtf, .xlsx, .xls.
+  --output    Export name. Required. The result is saved as <output>.md.
+  --path      Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.
+  --skip-tls  Skip TLS certificate verification for URL parsing. Optional. Default is false.
+  --timeout   Request timeout in seconds. Optional. Must be > 0. Default is 120.
+
+Output:
+  true on success. The output directory is created before parsing, and the markdown export is written only after a successful parse.
+  false followed by an error reason on failure. Existing files are not created or overwritten on failure.
+
+`)
+}
+
+func printAVScrapeUsage(w io.Writer, commandName string, format string) {
+	fmt.Fprintf(w, `Usage:
+  firecrawl %s --url <url> [--timeout <seconds>]
+
+Parameters:
+  --url      Target audio/video webpage URL. Required.
+  --timeout  Request timeout in seconds. Optional. Must be > 0. Default is 120.
+
+Output:
+  Compact single-line JSON with creditsUsed, title, description, %s, and success.
+
+`, commandName, format)
 }
 
 func printSearchUsage(w io.Writer, name string) {
@@ -1352,7 +1891,7 @@ Output:
 
 func printScrapeUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]
+  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--no-scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]
 
 Parameters:
   --output          Export name. Required. The result is saved as <output>.md.
@@ -1361,6 +1900,7 @@ Parameters:
   --include-tags    CSS selectors to include. Optional. Single selector, comma-separated string, or JSON string array.
   --exclude-tags    Additional CSS selectors to exclude. Optional. Single selector, comma-separated string, or JSON string array.
   --empty-tags      Clear the built-in exclude selector list while keeping user-provided --exclude-tags.
+  --no-scroll       Disable the default wait and scroll actions before scraping.
   --skip-tls        Skip TLS certificate verification for the upstream scrape target. Optional. Default is false.
   --headers         Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.
   --headers-file    Path to a headers file. Supports JSON headers/cookies, HTTP header string, Netscape cookies, or Cookie header value.

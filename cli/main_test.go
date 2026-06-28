@@ -53,7 +53,7 @@ func TestSearchCommandOutputsCompactMappedJSON(t *testing.T) {
 		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
 	}
 	out := strings.TrimSpace(stdout.String())
-	if strings.Contains(out, "\n") || strings.Contains(out, " ") {
+	if strings.Contains(out, "\n") || strings.Contains(out, ": ") {
 		t.Fatalf("expected compact single-line JSON, got %q", out)
 	}
 	var parsed map[string]any
@@ -68,6 +68,26 @@ func TestSearchCommandOutputsCompactMappedJSON(t *testing.T) {
 	news := data["news"].([]any)[0].(map[string]any)
 	if news["snippet"] != nil {
 		t.Fatalf("missing snippet should map to nil, got %#v", news["snippet"])
+	}
+}
+
+func TestFormatJSONDoesNotEscapeHTMLCharacters(t *testing.T) {
+	payload := map[string]any{"url": "https://storage.example/file.mp3?a=1&b=<tag>"}
+
+	compact := compactJSON(payload)
+	if strings.Contains(compact, `\u0026`) || strings.Contains(compact, `\u003c`) || strings.Contains(compact, `\u003e`) {
+		t.Fatalf("compact JSON should not HTML-escape characters: %s", compact)
+	}
+	if !strings.Contains(compact, "a=1&b=<tag>") {
+		t.Fatalf("compact JSON missing raw URL characters: %s", compact)
+	}
+
+	pretty := formatJSON(payload, true)
+	if strings.Contains(pretty, `\u0026`) || strings.Contains(pretty, `\u003c`) || strings.Contains(pretty, `\u003e`) {
+		t.Fatalf("pretty JSON should not HTML-escape characters: %s", pretty)
+	}
+	if !strings.Contains(pretty, "a=1&b=<tag>") {
+		t.Fatalf("pretty JSON missing raw URL characters: %s", pretty)
 	}
 }
 
@@ -97,6 +117,153 @@ func TestSearchCommandUsesTimeoutFlagForRequestAndPayload(t *testing.T) {
 	err := run([]string{"web", "--query", "ai", "--timeout", "7"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+}
+
+func TestScholarCommandOutputsCompactMappedJSON(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, 8)
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.URL.Path; got != "/search/research/papers" {
+			t.Fatalf("path = %s", got)
+		}
+		values := r.URL.Query()
+		if values.Get("query") != "AI" {
+			t.Fatalf("query = %q", values.Get("query"))
+		}
+		if values.Get("k") != "3" {
+			t.Fatalf("k = %q", values.Get("k"))
+		}
+		if values.Get("categories") != "cs.CY,cs.AI" {
+			t.Fatalf("categories = %q", values.Get("categories"))
+		}
+		if values.Get("from") != "2000-05-28" {
+			t.Fatalf("from = %q", values.Get("from"))
+		}
+		if values.Get("to") != "2026-06-28" {
+			t.Fatalf("to = %q", values.Get("to"))
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("Content-Type = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["timeout"] != float64(8000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
+		}
+		return jsonResponse(200, `{"success":true,"results":[{"paperId":"2581735124241874","primaryId":"arxiv:2307.10057","ids":{"arxiv":["2307.10057"]},"title":"Ethics in the Age of AI","abstract":"Ethics in AI has become a debated topic.","score":0.956892745058914,"extra":"ignored"}]}`), nil
+	})
+
+	old := endpoints["scholar"]
+	endpoints["scholar"] = "https://example.test/search/research/papers"
+	t.Cleanup(func() { endpoints["scholar"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"scholar",
+		"--query", "AI",
+		"--search-num", "3",
+		"--categories", "cs.CY,cs.AI",
+		"--time-from", "2000-05-28",
+		"--time-to", "2026-06-28",
+		"--timeout", "8",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	out := strings.TrimSpace(stdout.String())
+	if strings.Contains(out, "\n") || strings.Contains(out, ": ") {
+		t.Fatalf("expected compact single-line JSON, got %q", out)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["success"] != true {
+		t.Fatalf("success = %#v", parsed["success"])
+	}
+	data := parsed["data"].(map[string]any)
+	scholar := data["scholar"].([]any)
+	if len(scholar) != 1 {
+		t.Fatalf("scholar = %#v", scholar)
+	}
+	paper := scholar[0].(map[string]any)
+	for _, field := range []string{"title", "abstract", "paperId", "primaryId", "score"} {
+		if _, ok := paper[field]; !ok {
+			t.Fatalf("paper missing %s: %#v", field, paper)
+		}
+	}
+	if _, ok := paper["ids"]; ok {
+		t.Fatalf("unexpected ids field in mapped paper: %#v", paper)
+	}
+	if _, ok := paper["extra"]; ok {
+		t.Fatalf("unexpected extra field in mapped paper: %#v", paper)
+	}
+}
+
+func TestScholarCommandRequiresQuery(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"scholar", "--search-num", "3"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--query is required") {
+		t.Fatalf("expected --query validation error, got err=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "firecrawl scholar --query <keywords> [--search-num <1-500>]") {
+		t.Fatalf("stderr missing usage: %s", stderr.String())
+	}
+}
+
+func TestScholarCommandDefaultsSearchNumToFive(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		if got := r.URL.Query().Get("k"); got != "5" {
+			t.Fatalf("k = %q", got)
+		}
+		return jsonResponse(200, `{"success":true,"results":[]}`), nil
+	})
+
+	old := endpoints["scholar"]
+	endpoints["scholar"] = "https://example.test/search/research/papers"
+	t.Cleanup(func() { endpoints["scholar"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"scholar", "--query", "AI"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+}
+
+func TestScholarCommandValidatesSearchNumRange(t *testing.T) {
+	for _, value := range []string{"0", "501"} {
+		var stdout, stderr bytes.Buffer
+		err := run([]string{"scholar", "--query", "AI", "--search-num", value}, &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "--search-num must be an integer from 1 to 500") {
+			t.Fatalf("expected search-num range error, got err=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestScholarUsageShowsDateFormatExamples(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"scholar", "-h"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected flag package help to return an error")
+	}
+	usage := stderr.String()
+	for _, want := range []string{
+		"Format: yyyy-MM-dd, for example 2000-05-28.",
+		"Format: yyyy-MM-dd, for example 2026-06-28.",
+	} {
+		if !strings.Contains(usage, want) {
+			t.Fatalf("scholar usage missing %q:\n%s", want, usage)
+		}
 	}
 }
 
@@ -261,13 +428,403 @@ func TestEndpointURLUsesConfiguredBaseURL(t *testing.T) {
 
 	cases := map[string]string{
 		"search":       "https://self-hosted.example/api/v2/search",
+		"scholar":      "https://self-hosted.example/api/v2/search/research/papers",
 		"scrape":       "https://self-hosted.example/api/v2/scrape",
+		"parse":        "https://self-hosted.example/api/v2/parse",
 		"credit-usage": "https://self-hosted.example/api/v2/team/credit-usage",
 	}
 	for endpointName, want := range cases {
 		if got := endpointURL(endpointName); got != want {
 			t.Fatalf("endpointURL(%q) = %q, want %q", endpointName, got, want)
 		}
+	}
+}
+
+func TestRootUsageIncludesAVScrapeTimeout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--help"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	usage := stdout.String()
+	for _, want := range []string{
+		"firecrawl scholar    --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>]",
+		"firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--no-scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]",
+		"firecrawl audio-scrape --url <url> [--timeout <seconds>]",
+		"firecrawl video-scrape --url <url> [--timeout <seconds>]",
+	} {
+		if !strings.Contains(usage, want) {
+			t.Fatalf("root usage missing %q:\n%s", want, usage)
+		}
+	}
+}
+
+func TestAudioScrapeCommandOutputsCompactMappedJSON(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, defaultTimeoutSecs)
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.URL.String(); got != "https://example.test/scrape" {
+			t.Fatalf("url = %s", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["url"] != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
+			t.Fatalf("url payload = %#v", payload["url"])
+		}
+		formats := payload["formats"].([]any)
+		if len(formats) != 1 || formats[0] != "audio" {
+			t.Fatalf("formats = %#v", formats)
+		}
+		if payload["timeout"] != float64(120000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
+		}
+		if len(payload) != 3 {
+			t.Fatalf("unexpected audio-scrape payload fields: %#v", payload)
+		}
+		return jsonResponse(200, `{"success":true,"data":{"metadata":{"title":"Video title","description":"Video description","creditsUsed":5},"audio":"https://storage.example/audio.mp3"}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"audio-scrape", "--url", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	out := strings.TrimSpace(stdout.String())
+	if strings.Contains(out, "\n") || strings.Contains(out, ": ") {
+		t.Fatalf("expected compact single-line JSON, got %q", out)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["creditsUsed"] != float64(5) {
+		t.Fatalf("creditsUsed = %#v", parsed["creditsUsed"])
+	}
+	if parsed["title"] != "Video title" {
+		t.Fatalf("title = %#v", parsed["title"])
+	}
+	if parsed["description"] != "Video description" {
+		t.Fatalf("description = %#v", parsed["description"])
+	}
+	if parsed["audio"] != "https://storage.example/audio.mp3" {
+		t.Fatalf("audio = %#v", parsed["audio"])
+	}
+	if parsed["success"] != true {
+		t.Fatalf("success = %#v", parsed["success"])
+	}
+}
+
+func TestVideoScrapeCommandOutputsCompactMappedJSON(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, defaultTimeoutSecs)
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.URL.String(); got != "https://example.test/scrape" {
+			t.Fatalf("url = %s", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("Authorization header = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["url"] != "https://www.youtube.com/watch?v=dQw4w9WgXcQ" {
+			t.Fatalf("url payload = %#v", payload["url"])
+		}
+		formats := payload["formats"].([]any)
+		if len(formats) != 1 || formats[0] != "video" {
+			t.Fatalf("formats = %#v", formats)
+		}
+		if payload["timeout"] != float64(120000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
+		}
+		if len(payload) != 3 {
+			t.Fatalf("unexpected video-scrape payload fields: %#v", payload)
+		}
+		return jsonResponse(200, `{"success":true,"data":{"metadata":{"title":"Video title","description":"Video description","creditsUsed":5},"video":"https://storage.example/video.mp4"}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"video-scrape", "--url", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	out := strings.TrimSpace(stdout.String())
+	if strings.Contains(out, "\n") || strings.Contains(out, ": ") {
+		t.Fatalf("expected compact single-line JSON, got %q", out)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["creditsUsed"] != float64(5) {
+		t.Fatalf("creditsUsed = %#v", parsed["creditsUsed"])
+	}
+	if parsed["title"] != "Video title" {
+		t.Fatalf("title = %#v", parsed["title"])
+	}
+	if parsed["description"] != "Video description" {
+		t.Fatalf("description = %#v", parsed["description"])
+	}
+	if parsed["video"] != "https://storage.example/video.mp4" {
+		t.Fatalf("video = %#v", parsed["video"])
+	}
+	if parsed["success"] != true {
+		t.Fatalf("success = %#v", parsed["success"])
+	}
+}
+
+func TestAVScrapeCommandUsesTimeoutFlagForRequestAndPayload(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, 6)
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["timeout"] != float64(6000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
+		}
+		return jsonResponse(200, `{"success":true,"data":{"metadata":{"title":"Video title","creditsUsed":5},"video":"https://storage.example/video.mp4"}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"video-scrape", "--url", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "--timeout", "6"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+}
+
+func TestAVScrapeCommandsRequireURL(t *testing.T) {
+	for _, commandName := range []string{"audio-scrape", "video-scrape"} {
+		t.Run(commandName, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := run([]string{commandName}, &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), "--url is required") {
+				t.Fatalf("expected --url validation error, got err=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "firecrawl "+commandName+" --url <url>") {
+				t.Fatalf("stderr missing usage: %s", stderr.String())
+			}
+		})
+	}
+}
+
+func TestParseURLCommandWritesMarkdownFileOnSuccess(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, 7)
+		if r.URL.String() != "https://example.test/scrape" {
+			t.Fatalf("url = %s", r.URL.String())
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("Content-Type = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["url"] != "https://example.com/file.xlsx" {
+			t.Fatalf("url payload = %#v", payload["url"])
+		}
+		formats := payload["formats"].([]any)
+		if len(formats) != 1 || formats[0] != "markdown" {
+			t.Fatalf("formats = %#v", formats)
+		}
+		parsers := payload["parsers"].([]any)
+		if len(parsers) != 1 || parsers[0] != "pdf" {
+			t.Fatalf("parsers = %#v", parsers)
+		}
+		if payload["removeBase64Images"] != false {
+			t.Fatalf("removeBase64Images = %#v", payload["removeBase64Images"])
+		}
+		if payload["skipTlsVerification"] != true {
+			t.Fatalf("skipTlsVerification = %#v", payload["skipTlsVerification"])
+		}
+		if payload["timeout"] != float64(7000) {
+			t.Fatalf("timeout = %#v", payload["timeout"])
+		}
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"hello%20world%21\\nnext","metadata":{"title":"Document","url":"https://example.com/file.xlsx","language":"en","creditsUsed":1}}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"parse",
+		"--url", "https://example.com/file.xlsx",
+		"--output", "parsed",
+		"--path", dir,
+		"--skip-tls",
+		"--timeout", "7",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "true" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "parsed.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"## title: Document",
+		"## url: https://example.com/file.xlsx",
+		"## language: en",
+		"## creditsUsed: 1",
+		"hello world!\nnext",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("export content missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestParseFileCommandUploadsMultipartAndWritesMarkdownFile(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		assertRequestTimeout(t, r, 9)
+		if r.URL.String() != "https://example.test/parse" {
+			t.Fatalf("url = %s", r.URL.String())
+		}
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data; boundary=") {
+			t.Fatalf("Content-Type = %q", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		files := r.MultipartForm.File["file"]
+		if len(files) != 1 || files[0].Filename != "input.xlsx" {
+			t.Fatalf("uploaded files = %#v", files)
+		}
+		uploaded, err := files[0].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer uploaded.Close()
+		body, err := io.ReadAll(uploaded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != "xlsx bytes" {
+			t.Fatalf("uploaded body = %q", string(body))
+		}
+		var options map[string]any
+		if err := json.Unmarshal([]byte(r.FormValue("options")), &options); err != nil {
+			t.Fatal(err)
+		}
+		formats := options["formats"].([]any)
+		if len(formats) != 1 || formats[0] != "markdown" {
+			t.Fatalf("formats = %#v", formats)
+		}
+		parsers := options["parsers"].([]any)
+		if len(parsers) != 1 || parsers[0] != "pdf" {
+			t.Fatalf("parsers = %#v", parsers)
+		}
+		if options["removeBase64Images"] != false {
+			t.Fatalf("removeBase64Images = %#v", options["removeBase64Images"])
+		}
+		if options["timeout"] != float64(9000) {
+			t.Fatalf("timeout = %#v", options["timeout"])
+		}
+		if _, ok := options["skipTlsVerification"]; ok {
+			t.Fatalf("skipTlsVerification should not be included for file mode: %#v", options)
+		}
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"table\\nrow","metadata":{"title":"Document","url":"https://parse.example/uploads/input.xlsx","language":"en","creditsUsed":1}}}`), nil
+	})
+
+	old := endpoints["parse"]
+	endpoints["parse"] = "https://example.test/parse"
+	t.Cleanup(func() { endpoints["parse"] = old })
+
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "input.xlsx")
+	if err := os.WriteFile(inputPath, []byte("xlsx bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"parse",
+		"--file", inputPath,
+		"--output", "parsed-file",
+		"--path", dir,
+		"--skip-tls",
+		"--timeout", "9",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "true" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "parsed-file.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "## url: https://parse.example/uploads/input.xlsx") || !strings.Contains(text, "table\nrow") {
+		t.Fatalf("export content = %q", text)
+	}
+}
+
+func TestParseCommandRequiresExactlyOneInput(t *testing.T) {
+	for _, args := range [][]string{
+		{"parse", "--output", "x"},
+		{"parse", "--output", "x", "--url", "https://example.com/file.pdf", "--file", "file.pdf"},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := run(args, &stdout, &stderr)
+		if err == nil {
+			t.Fatalf("expected validation error for args %#v", args)
+		}
+		if !strings.Contains(stderr.String(), "firecrawl parse (--url <url> | --file <file>)") {
+			t.Fatalf("stderr missing usage: %s", stderr.String())
+		}
+	}
+}
+
+func TestParseFileCommandRejectsUnsupportedExtension(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "input.txt")
+	if err := os.WriteFile(inputPath, []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"parse",
+		"--file", inputPath,
+		"--output", "parsed",
+	}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--file extension must be one of") {
+		t.Fatalf("expected extension validation error, got err=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
 	}
 }
 
@@ -290,6 +847,18 @@ func TestScrapeCommandWritesMarkdownFileOnSuccess(t *testing.T) {
 		}
 		if _, ok := payload["maxCharacters"]; ok {
 			t.Fatal("maxCharacters must not be forwarded upstream")
+		}
+		actions := payload["actions"].([]any)
+		if len(actions) != 2 {
+			t.Fatalf("actions = %#v", actions)
+		}
+		waitAction := actions[0].(map[string]any)
+		if waitAction["type"] != "wait" || waitAction["milliseconds"] != float64(2) {
+			t.Fatalf("wait action = %#v", waitAction)
+		}
+		scrollAction := actions[1].(map[string]any)
+		if scrollAction["type"] != "scroll" || scrollAction["direction"] != "down" || scrollAction["selector"] != "body" {
+			t.Fatalf("scroll action = %#v", scrollAction)
 		}
 		includeTags := payload["includeTags"].([]any)
 		if len(includeTags) != 2 || includeTags[0] != "article" || includeTags[1] != ".content" {
@@ -511,6 +1080,37 @@ func TestScrapeCommandSkipTLSFlag(t *testing.T) {
 	}
 }
 
+func TestScrapeCommandNoScrollFlag(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload["actions"]; ok {
+			t.Fatalf("actions should be omitted with --no-scroll: %#v", payload["actions"])
+		}
+		return jsonResponse(200, `{"success":true,"data":{"markdown":"ok","metadata":{"title":"T"}}}`), nil
+	})
+
+	old := endpoints["scrape"]
+	endpoints["scrape"] = "https://example.test/scrape"
+	t.Cleanup(func() { endpoints["scrape"] = old })
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"scrape",
+		"--output", "page",
+		"--path", dir,
+		"--url", "https://example.com",
+		"--no-scroll",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stderr=%s", err, stderr.String())
+	}
+}
+
 func TestScrapeCommandWritesMarkdownFileToPath(t *testing.T) {
 	t.Setenv(apiKeyEnv, "test-key")
 	setMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
@@ -657,7 +1257,7 @@ func TestScrapeCommandCreatesPathBeforeRequest(t *testing.T) {
 }
 
 func TestBuildScrapePayloadEmptyTags(t *testing.T) {
-	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil, defaultTimeoutSecs, false)
+	payload := buildScrapePayload("https://example.com", nil, []string{".nav", "script", ".nav"}, true, nil, defaultTimeoutSecs, false, false)
 	excludeTags := payload["excludeTags"].([]string)
 	if strings.Join(excludeTags, ",") != ".nav,script" {
 		t.Fatalf("excludeTags = %#v", excludeTags)
@@ -665,14 +1265,27 @@ func TestBuildScrapePayloadEmptyTags(t *testing.T) {
 	if payload["timeout"] != int64(120000) {
 		t.Fatalf("timeout = %#v", payload["timeout"])
 	}
+	actions := payload["actions"].([]map[string]any)
+	if len(actions) != 2 {
+		t.Fatalf("actions = %#v", actions)
+	}
+	if actions[0]["type"] != "wait" || actions[0]["milliseconds"] != 2 {
+		t.Fatalf("wait action = %#v", actions[0])
+	}
+	if actions[1]["type"] != "scroll" || actions[1]["direction"] != "down" || actions[1]["selector"] != "body" {
+		t.Fatalf("scroll action = %#v", actions[1])
+	}
 
-	payload = buildScrapePayload("https://example.com", nil, nil, true, nil, defaultTimeoutSecs, false)
+	payload = buildScrapePayload("https://example.com", nil, nil, true, nil, defaultTimeoutSecs, false, true)
 	excludeTags = payload["excludeTags"].([]string)
 	if len(excludeTags) != 0 {
 		t.Fatalf("excludeTags = %#v", excludeTags)
 	}
+	if _, ok := payload["actions"]; ok {
+		t.Fatalf("actions should be omitted with noScroll=true: %#v", payload["actions"])
+	}
 
-	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil, defaultTimeoutSecs, false)
+	payload = buildScrapePayload("https://example.com", nil, []string{".nav"}, false, nil, defaultTimeoutSecs, false, false)
 	excludeTags = payload["excludeTags"].([]string)
 	if !containsString(excludeTags, "script") || !containsString(excludeTags, ".nav") {
 		t.Fatalf("excludeTags should include built-in and user selectors, got %#v", excludeTags)

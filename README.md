@@ -136,6 +136,8 @@ It reduces common non-content regions such as:
 
 This is not meant to aggressively delete every non-article element. The priority is **high recall with reduced noise**: keep the source material useful for local search while removing obvious boilerplate.
 
+The scrape command also runs a short default wait and page scroll before extraction, so lazy-loaded content has a chance to appear. Use `--no-scroll` to disable those actions.
+
 If a page contains useful content in an unusual region, you can disable the built-in filter:
 
 ```bash
@@ -254,7 +256,11 @@ firecrawl aggregated
 firecrawl web
 firecrawl news
 firecrawl image
+firecrawl scholar
 firecrawl scrape
+firecrawl parse
+firecrawl audio-scrape
+firecrawl video-scrape
 firecrawl credit-usage
 ```
 
@@ -401,6 +407,35 @@ firecrawl scrape \
   --exclude-tags ".nav"
 ```
 
+### `--no-scroll`
+
+Optional. Disable the default wait and scroll actions before scraping.
+
+By default, scrape sends these actions in the request payload:
+
+```json
+[
+  {
+    "type": "wait",
+    "milliseconds": 2
+  },
+  {
+    "type": "scroll",
+    "direction": "down",
+    "selector": "body"
+  }
+]
+```
+
+Use `--no-scroll` when a page should be captured without the extra interaction:
+
+```bash
+firecrawl scrape \
+  --url "https://example.com" \
+  --output page \
+  --no-scroll
+```
+
 ### `--skip-tls`
 
 Optional. Skip TLS certificate verification for the upstream scrape target.
@@ -453,6 +488,164 @@ firecrawl scrape \
   --output page \
   --timeout 180
 ```
+
+## Scholar command
+
+`scholar` searches research papers and prints compact single-line JSON to stdout.
+
+```bash
+firecrawl scholar \
+  --query "AI" \
+  --search-num 3 \
+  --categories "cs.CY" \
+  --time-from "2000-05-28" \
+  --time-to "2026-06-28"
+```
+
+The command sends a GET request to `/v2/search/research/papers` with query string parameters and a JSON body containing `timeout`.
+
+### Scholar options
+
+#### `--query`
+
+Required. Research paper search keywords. Minimum length is `1`.
+
+#### `--search-num`
+
+Optional. Number of papers to return. Legal range is `1` to `500`. Default is `5`.
+
+#### `--categories`
+
+Optional. Comma-separated paper category filters. All filters must match.
+
+#### `--time-from`
+
+Optional. Inclusive lower bound for created/updated date. Format: `yyyy-MM-dd`, for example `2000-05-28`.
+
+#### `--time-to`
+
+Optional. Inclusive upper bound for created/updated date. Format: `yyyy-MM-dd`, for example `2026-06-28`.
+
+#### `--timeout`
+
+Optional. Request timeout in seconds. Default is `120`.
+
+Output fields:
+
+```json
+{"data":{"scholar":[{"abstract":"Paper abstract","paperId":"2581735124241874","primaryId":"arxiv:2307.10057","score":0.956892745058914,"title":"Paper title"}]},"success":true}
+```
+
+## Parse command
+
+Use `parse` for documents from a URL or local file. The command writes Markdown to a local `.md` file and prints only `true` or `false` to stdout.
+
+### Parse a document URL
+
+```bash
+firecrawl parse \
+  --url "https://example.com/report.xlsx" \
+  --output report \
+  --path ./Temp-Scrape
+```
+
+URL mode sends the document URL through the scrape endpoint with Markdown output, PDF parser support, base64 images preserved, and the configured timeout.
+
+### Parse a local file
+
+```bash
+firecrawl parse \
+  --file ./report.xlsx \
+  --output report \
+  --path ./Temp-Scrape
+```
+
+File mode uploads the local file to the parse endpoint with multipart form data.
+
+Supported local file extensions:
+
+```text
+.html .htm .pdf .docx .doc .odt .rtf .xlsx .xls
+```
+
+### Parse options
+
+#### `--url`
+
+Target document URL. Required unless `--file` is provided. `--url` and `--file` are mutually exclusive.
+
+```bash
+firecrawl parse --url "https://example.com/report.pdf" --output report
+```
+
+#### `--file`
+
+Local document file. Required unless `--url` is provided.
+
+```bash
+firecrawl parse --file ./report.pdf --output report
+```
+
+#### `--output`
+
+Required. Export name. The result is saved as `<output>.md`.
+
+#### `--path`
+
+Optional. Output directory. Defaults to the current directory.
+
+#### `--skip-tls`
+
+Optional. URL mode only. Skip TLS certificate verification for the upstream document URL. Default is false.
+
+#### `--timeout`
+
+Optional. Request timeout in seconds. Default is `120`.
+
+The generated Markdown begins with:
+
+```markdown
+## title:
+## url:
+## language:
+## creditsUsed:
+
+markdown content
+```
+
+## Audio and video scrape commands
+
+`audio-scrape` and `video-scrape` request Firecrawl AV extraction and print compact single-line JSON to stdout.
+
+### Audio scrape
+
+```bash
+firecrawl audio-scrape \
+  --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" \
+  --timeout 60
+```
+
+Output fields:
+
+```json
+{"creditsUsed":5,"title":"Video title","description":"Video description","audio":"https://storage.example/audio.mp3","success":true}
+```
+
+### Video scrape
+
+```bash
+firecrawl video-scrape \
+  --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" \
+  --timeout 60
+```
+
+Output fields:
+
+```json
+{"creditsUsed":5,"title":"Video title","description":"Video description","video":"https://storage.example/video.mp4","success":true}
+```
+
+Both commands require `--url`. `--timeout` is optional, accepts seconds, defaults to `120`, and is forwarded to Firecrawl as milliseconds.
 
 ## Recommended agent usage
 
@@ -626,7 +819,7 @@ Default output is JSON:
 
 ## Exit behavior
 
-### Scrape
+### Scrape and parse
 
 Success:
 
@@ -641,11 +834,11 @@ false
 <error reason>
 ```
 
-The CLI writes the Markdown file only after a successful scrape. Existing files are not created or overwritten on scrape failure.
+The CLI writes the Markdown file only after a successful scrape or parse. Existing files are not created or overwritten on failure.
 
-### Search and credit usage
+### Search, scholar, credit usage, audio scrape, and video scrape
 
-Search and credit usage commands output JSON.
+Search, `scholar`, credit usage, `audio-scrape`, and `video-scrape` commands output JSON.
 
 ## Example: local research folder
 
