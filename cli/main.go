@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,6 +12,7 @@ import (
 	"io"
 	"math/rand"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +34,7 @@ const (
 	maxTimeoutSecs     = 9223372036
 	defaultRetryCount  = 3
 	defaultRetryDelay  = 500 * time.Millisecond
+	proxyFlagHelp      = "Proxy URL for requests to Firecrawl API. Optional. Supports http, https, socks4, socks4a, socks5, and socks5h."
 )
 
 //go:embed data/country_aliases.json
@@ -114,11 +118,13 @@ func runSearch(name string, sources []string, args []string, stdout io.Writer, s
 	var country string
 	searchNum := 20
 	var searchTime string
+	var proxy string
 	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&query, "query", "", "Search keywords. Required.")
 	fs.StringVar(&country, "country", "", "Country or region name/ISO code. Optional. Default is US.")
 	fs.IntVar(&searchNum, "search-num", 20, "Number of results to return. Optional. Range: 1-100. Default is 20.")
 	fs.StringVar(&searchTime, "search-time", "", `Time filter. Optional. One of: "hour", "day", "week", "month", "year".`)
+	addProxyFlag(fs, &proxy)
 	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printSearchUsage(stderr, name) }
 	if err := fs.Parse(args); err != nil {
@@ -137,6 +143,9 @@ func runSearch(name string, sources []string, args []string, stdout io.Writer, s
 	if err := validateTimeoutSecs(timeoutSecs); err != nil {
 		return cliError{message: err.Error(), code: 2}
 	}
+	if err := validateProxyOption(proxy); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
 	tbs, err := mapSearchTime(searchTime)
 	if err != nil {
 		return cliError{message: err.Error(), code: 2}
@@ -147,7 +156,7 @@ func runSearch(name string, sources []string, args []string, stdout io.Writer, s
 		payload["tbs"] = tbs
 	}
 
-	raw, err := firecrawlPostWithRetry("search", payload, timeoutSecs)
+	raw, err := firecrawlPostWithRetry("search", payload, timeoutSecs, proxy)
 	if err != nil {
 		out := compactJSON(map[string]any{
 			"success": false,
@@ -190,6 +199,7 @@ func runScholar(args []string, stdout io.Writer, stderr io.Writer) error {
 	var categories string
 	var timeFrom string
 	var timeTo string
+	var proxy string
 	searchNum := 5
 	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&query, "query", "", "Research paper search keywords. Required.")
@@ -197,6 +207,7 @@ func runScholar(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.StringVar(&categories, "categories", "", "Comma-separated paper category filters. Optional. All filters must match.")
 	fs.StringVar(&timeFrom, "time-from", "", "Inclusive created/updated date lower bound. Optional.")
 	fs.StringVar(&timeTo, "time-to", "", "Inclusive created/updated date upper bound. Optional.")
+	addProxyFlag(fs, &proxy)
 	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printScholarUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
@@ -215,8 +226,11 @@ func runScholar(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err := validateTimeoutSecs(timeoutSecs); err != nil {
 		return cliError{message: err.Error(), code: 2}
 	}
+	if err := validateProxyOption(proxy); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
 
-	raw, err := firecrawlGetWithJSONBodyWithRetry("scholar", buildScholarQuery(query, searchNum, categories, timeFrom, timeTo), buildTimeoutPayload(timeoutSecs), timeoutSecs)
+	raw, err := firecrawlGetWithJSONBodyWithRetry("scholar", buildScholarQuery(query, searchNum, categories, timeFrom, timeTo), buildTimeoutPayload(timeoutSecs), timeoutSecs, proxy)
 	if err != nil {
 		out := compactJSON(map[string]any{
 			"success": false,
@@ -253,6 +267,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	var skipTLS bool
 	var headersRaw string
 	var headersFile string
+	var proxy string
 	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md.")
 	fs.StringVar(&outputDir, "path", "", "Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.")
@@ -264,6 +279,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.BoolVar(&skipTLS, "skip-tls", false, "Skip TLS certificate verification for the upstream scrape target. Optional. Default is false.")
 	fs.StringVar(&headersRaw, "headers", "", `Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.`)
 	fs.StringVar(&headersFile, "headers-file", "", "Path to a headers file. Supports JSON headers/cookies, HTTP header string, Netscape cookies, or Cookie header value.")
+	addProxyFlag(fs, &proxy)
 	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printScrapeUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
@@ -281,6 +297,9 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		return cliError{message: fmt.Sprintf("unexpected positional arguments: %s", strings.Join(fs.Args(), " ")), code: 2}
 	}
 	if err := validateTimeoutSecs(timeoutSecs); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
+	if err := validateProxyOption(proxy); err != nil {
 		return cliError{message: err.Error(), code: 2}
 	}
 	fileHeaders, err := parseHeadersFile(headersFile)
@@ -305,7 +324,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	payload := buildScrapePayload(targetURL, include, exclude, emptyTags, headers, timeoutSecs, skipTLS, scroll)
-	raw, err := firecrawlPost("scrape", payload, timeoutSecs)
+	raw, err := firecrawlPost("scrape", payload, timeoutSecs, proxy)
 	if err != nil {
 		fmt.Fprintln(stdout, "false")
 		fmt.Fprintln(stdout, err.Error())
@@ -315,7 +334,7 @@ func runScrape(args []string, stdout io.Writer, stderr io.Writer) error {
 		fallbackPayload := clonePayload(payload)
 		delete(fallbackPayload, "includeTags")
 		delete(fallbackPayload, "excludeTags")
-		if fallbackRaw, fallbackErr := firecrawlPost("scrape", fallbackPayload, timeoutSecs); fallbackErr == nil && upstreamSuccessNotFalse(fallbackRaw) && scrapeData(fallbackRaw) != nil {
+		if fallbackRaw, fallbackErr := firecrawlPost("scrape", fallbackPayload, timeoutSecs, proxy); fallbackErr == nil && upstreamSuccessNotFalse(fallbackRaw) && scrapeData(fallbackRaw) != nil {
 			raw = fallbackRaw
 		}
 	}
@@ -351,12 +370,14 @@ func runParse(args []string, stdout io.Writer, stderr io.Writer) error {
 	var targetURL string
 	var filePath string
 	var skipTLS bool
+	var proxy string
 	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&output, "output", "", "Export name. Required. The result is saved as <output>.md.")
 	fs.StringVar(&outputDir, "path", "", "Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.")
 	fs.StringVar(&targetURL, "url", "", "Target document URL. Required unless --file is provided.")
 	fs.StringVar(&filePath, "file", "", "Local document file. Required unless --url is provided.")
 	fs.BoolVar(&skipTLS, "skip-tls", false, "Skip TLS certificate verification for URL parsing. Optional. Default is false.")
+	addProxyFlag(fs, &proxy)
 	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printParseUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
@@ -383,6 +404,9 @@ func runParse(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err := validateTimeoutSecs(timeoutSecs); err != nil {
 		return cliError{message: err.Error(), code: 2}
 	}
+	if err := validateProxyOption(proxy); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
 	if hasFile {
 		if err := validateParseFile(filePath); err != nil {
 			return cliError{message: err.Error(), code: 2}
@@ -395,9 +419,9 @@ func runParse(args []string, stdout io.Writer, stderr io.Writer) error {
 	var raw map[string]any
 	var err error
 	if hasFile {
-		raw, err = firecrawlPostMultipartFile("parse", filePath, buildParseFileOptions(timeoutSecs), timeoutSecs)
+		raw, err = firecrawlPostMultipartFile("parse", filePath, buildParseFileOptions(timeoutSecs), timeoutSecs, proxy)
 	} else {
-		raw, err = firecrawlPost("scrape", buildParseURLPayload(targetURL, timeoutSecs, skipTLS), timeoutSecs)
+		raw, err = firecrawlPost("scrape", buildParseURLPayload(targetURL, timeoutSecs, skipTLS), timeoutSecs, proxy)
 	}
 	if err != nil {
 		fmt.Fprintln(stdout, "false")
@@ -439,8 +463,10 @@ func runAVScrape(commandName string, format string, args []string, stdout io.Wri
 	fs := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var targetURL string
+	var proxy string
 	timeoutSecs := defaultTimeoutSecs
 	fs.StringVar(&targetURL, "url", "", "Target audio/video webpage URL. Required.")
+	addProxyFlag(fs, &proxy)
 	fs.IntVar(&timeoutSecs, "timeout", defaultTimeoutSecs, "Request timeout in seconds. Optional. Must be > 0. Default is 120.")
 	fs.Usage = func() { printAVScrapeUsage(stderr, commandName, format) }
 	if err := fs.Parse(args); err != nil {
@@ -456,9 +482,12 @@ func runAVScrape(commandName string, format string, args []string, stdout io.Wri
 	if err := validateTimeoutSecs(timeoutSecs); err != nil {
 		return cliError{message: err.Error(), code: 2}
 	}
+	if err := validateProxyOption(proxy); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
 
 	payload := buildAVScrapePayload(targetURL, format, timeoutSecs)
-	raw, err := firecrawlPost("scrape", payload, timeoutSecs)
+	raw, err := firecrawlPost("scrape", payload, timeoutSecs, proxy)
 	if err != nil {
 		out := compactJSON(map[string]any{
 			"success": false,
@@ -499,8 +528,10 @@ func runCreditUsage(args []string, stdout io.Writer, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	var jsonOutput bool
 	var pretty bool
+	var proxy string
 	fs.BoolVar(&jsonOutput, "json", false, "Output JSON. Optional. JSON is the default output format.")
 	fs.BoolVar(&pretty, "pretty", false, "Pretty-print JSON output. Optional.")
+	addProxyFlag(fs, &proxy)
 	fs.Usage = func() { printCreditUsageUsage(stderr) }
 	if err := fs.Parse(args); err != nil {
 		return cliError{code: 2}
@@ -508,9 +539,12 @@ func runCreditUsage(args []string, stdout io.Writer, stderr io.Writer) error {
 	if fs.NArg() > 0 {
 		return cliError{message: fmt.Sprintf("unexpected positional arguments: %s", strings.Join(fs.Args(), " ")), code: 2}
 	}
+	if err := validateProxyOption(proxy); err != nil {
+		return cliError{message: err.Error(), code: 2}
+	}
 	_ = jsonOutput
 
-	raw, err := firecrawlGetWithRetry("credit-usage")
+	raw, err := firecrawlGetWithRetry("credit-usage", proxy)
 	if err != nil {
 		fmt.Fprintln(stdout, formatJSON(map[string]any{
 			"success": false,
@@ -679,8 +713,12 @@ func apiKeyFromEnv() (string, error) {
 	return key, nil
 }
 
-func firecrawlGet(endpointName string) (map[string]any, error) {
+func firecrawlGet(endpointName string, proxyRaw string) (map[string]any, error) {
 	key, err := apiKeyFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	client, err := clientWithProxy(proxyRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -691,7 +729,7 @@ func firecrawlGet(endpointName string) (map[string]any, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
 	}
@@ -699,13 +737,13 @@ func firecrawlGet(endpointName string) (map[string]any, error) {
 	return parseFirecrawlResponse(endpointName, resp)
 }
 
-func firecrawlGetWithRetry(endpointName string) (map[string]any, error) {
+func firecrawlGetWithRetry(endpointName string, proxyRaw string) (map[string]any, error) {
 	return firecrawlWithRetry(func() (map[string]any, error) {
-		return firecrawlGet(endpointName)
+		return firecrawlGet(endpointName, proxyRaw)
 	})
 }
 
-func firecrawlGetWithJSONBody(endpointName string, query url.Values, payload map[string]any, timeoutSecs int) (map[string]any, error) {
+func firecrawlGetWithJSONBody(endpointName string, query url.Values, payload map[string]any, timeoutSecs int, proxyRaw string) (map[string]any, error) {
 	key, err := apiKeyFromEnv()
 	if err != nil {
 		return nil, err
@@ -729,7 +767,10 @@ func firecrawlGetWithJSONBody(endpointName string, query url.Values, payload map
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
-	client := clientWithTimeout(timeoutSecs)
+	client, err := clientWithTimeout(timeoutSecs, proxyRaw)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
@@ -738,13 +779,13 @@ func firecrawlGetWithJSONBody(endpointName string, query url.Values, payload map
 	return parseFirecrawlResponse(endpointName, resp)
 }
 
-func firecrawlGetWithJSONBodyWithRetry(endpointName string, query url.Values, payload map[string]any, timeoutSecs int) (map[string]any, error) {
+func firecrawlGetWithJSONBodyWithRetry(endpointName string, query url.Values, payload map[string]any, timeoutSecs int, proxyRaw string) (map[string]any, error) {
 	return firecrawlWithRetry(func() (map[string]any, error) {
-		return firecrawlGetWithJSONBody(endpointName, query, payload, timeoutSecs)
+		return firecrawlGetWithJSONBody(endpointName, query, payload, timeoutSecs, proxyRaw)
 	})
 }
 
-func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int) (map[string]any, error) {
+func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int, proxyRaw string) (map[string]any, error) {
 	key, err := apiKeyFromEnv()
 	if err != nil {
 		return nil, err
@@ -761,7 +802,10 @@ func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int)
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
-	client := clientWithTimeout(timeoutSecs)
+	client, err := clientWithTimeout(timeoutSecs, proxyRaw)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
@@ -770,7 +814,7 @@ func firecrawlPost(endpointName string, payload map[string]any, timeoutSecs int)
 	return parseFirecrawlResponse(endpointName, resp)
 }
 
-func firecrawlPostMultipartFile(endpointName string, filePath string, options map[string]any, timeoutSecs int) (map[string]any, error) {
+func firecrawlPostMultipartFile(endpointName string, filePath string, options map[string]any, timeoutSecs int, proxyRaw string) (map[string]any, error) {
 	key, err := apiKeyFromEnv()
 	if err != nil {
 		return nil, err
@@ -809,7 +853,10 @@ func firecrawlPostMultipartFile(endpointName string, filePath string, options ma
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("User-Agent", "firecrawl_cli/1.0")
-	client := clientWithTimeout(timeoutSecs)
+	client, err := clientWithTimeout(timeoutSecs, proxyRaw)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, firecrawlRequestError{endpoint: endpointName, err: err}
@@ -818,9 +865,9 @@ func firecrawlPostMultipartFile(endpointName string, filePath string, options ma
 	return parseFirecrawlResponse(endpointName, resp)
 }
 
-func firecrawlPostWithRetry(endpointName string, payload map[string]any, timeoutSecs int) (map[string]any, error) {
+func firecrawlPostWithRetry(endpointName string, payload map[string]any, timeoutSecs int, proxyRaw string) (map[string]any, error) {
 	return firecrawlWithRetry(func() (map[string]any, error) {
-		return firecrawlPost(endpointName, payload, timeoutSecs)
+		return firecrawlPost(endpointName, payload, timeoutSecs, proxyRaw)
 	})
 }
 
@@ -877,6 +924,15 @@ func validateTimeoutSecs(timeoutSecs int) error {
 	return nil
 }
 
+func addProxyFlag(fs *flag.FlagSet, target *string) {
+	fs.StringVar(target, "proxy", "", proxyFlagHelp)
+}
+
+func validateProxyOption(proxyRaw string) error {
+	_, err := parseProxyURL(proxyRaw)
+	return err
+}
+
 func flagProvided(fs *flag.FlagSet, name string) bool {
 	found := false
 	fs.Visit(func(f *flag.Flag) {
@@ -919,10 +975,367 @@ func supportedParseFileExt(ext string) bool {
 	}
 }
 
-func clientWithTimeout(timeoutSecs int) *http.Client {
+func clientWithProxy(proxyRaw string) (*http.Client, error) {
 	client := *httpClient
+	if strings.TrimSpace(proxyRaw) == "" {
+		return &client, nil
+	}
+	transport, err := transportWithProxy(httpClient.Transport, proxyRaw)
+	if err != nil {
+		return nil, err
+	}
+	client.Transport = transport
+	return &client, nil
+}
+
+func clientWithTimeout(timeoutSecs int, proxyRaw string) (*http.Client, error) {
+	client, err := clientWithProxy(proxyRaw)
+	if err != nil {
+		return nil, err
+	}
 	client.Timeout = timeoutDuration(timeoutSecs)
-	return &client
+	return client, nil
+}
+
+func transportWithProxy(base http.RoundTripper, proxyRaw string) (http.RoundTripper, error) {
+	proxyURL, err := parseProxyURL(proxyRaw)
+	if err != nil {
+		return nil, err
+	}
+	transport := cloneHTTPTransport(base)
+	switch strings.ToLower(proxyURL.Scheme) {
+	case "http", "https":
+		transport.Proxy = http.ProxyURL(proxyURL)
+	case "socks4", "socks4a":
+		transport.Proxy = nil
+		transport.DialContext = socks4DialContext(proxyURL)
+	case "socks5", "socks5h":
+		transport.Proxy = nil
+		transport.DialContext = socks5DialContext(proxyURL)
+	default:
+		return nil, unsupportedProxySchemeError()
+	}
+	return transport, nil
+}
+
+func cloneHTTPTransport(base http.RoundTripper) *http.Transport {
+	if transport, ok := base.(*http.Transport); ok && transport != nil {
+		return transport.Clone()
+	}
+	if transport, ok := http.DefaultTransport.(*http.Transport); ok {
+		return transport.Clone()
+	}
+	return &http.Transport{}
+}
+
+func parseProxyURL(proxyRaw string) (*url.URL, error) {
+	proxyRaw = strings.TrimSpace(proxyRaw)
+	if proxyRaw == "" {
+		return nil, nil
+	}
+	proxyURL, err := url.Parse(proxyRaw)
+	if err != nil {
+		return nil, fmt.Errorf("--proxy must be a valid proxy URL")
+	}
+	proxyURL.Scheme = strings.ToLower(proxyURL.Scheme)
+	if proxyURL.Scheme == "" || proxyURL.Host == "" || proxyURL.Hostname() == "" {
+		return nil, fmt.Errorf("--proxy must include a scheme and host, for example http://127.0.0.1:8080")
+	}
+	switch proxyURL.Scheme {
+	case "http", "https", "socks4", "socks4a", "socks5", "socks5h":
+		return proxyURL, nil
+	default:
+		return nil, unsupportedProxySchemeError()
+	}
+}
+
+func unsupportedProxySchemeError() error {
+	return fmt.Errorf("--proxy scheme must be one of: http, https, socks4, socks4a, socks5, socks5h")
+}
+
+func proxyAddress(proxyURL *url.URL) string {
+	port := proxyURL.Port()
+	if port == "" {
+		switch strings.ToLower(proxyURL.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		default:
+			port = "1080"
+		}
+	}
+	return net.JoinHostPort(proxyURL.Hostname(), port)
+}
+
+func socks5DialContext(proxyURL *url.URL) func(context.Context, string, string) (net.Conn, error) {
+	var dialer net.Dialer
+	return func(ctx context.Context, network string, address string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, proxyAddress(proxyURL))
+		if err != nil {
+			return nil, err
+		}
+		if err := applyContextDeadline(ctx, conn); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		if err := socks5Handshake(conn, address, proxyURL); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		_ = conn.SetDeadline(time.Time{})
+		return conn, nil
+	}
+}
+
+func socks5Handshake(conn net.Conn, targetAddress string, proxyURL *url.URL) error {
+	methods := []byte{0x00}
+	if proxyURL.User != nil {
+		methods = append(methods, 0x02)
+	}
+	if _, err := conn.Write(append([]byte{0x05, byte(len(methods))}, methods...)); err != nil {
+		return err
+	}
+	response := make([]byte, 2)
+	if _, err := io.ReadFull(conn, response); err != nil {
+		return err
+	}
+	if response[0] != 0x05 {
+		return fmt.Errorf("socks5 proxy returned invalid version")
+	}
+	switch response[1] {
+	case 0x00:
+	case 0x02:
+		if err := socks5UsernamePasswordAuth(conn, proxyURL); err != nil {
+			return err
+		}
+	case 0xff:
+		return fmt.Errorf("socks5 proxy requires an unsupported authentication method")
+	default:
+		return fmt.Errorf("socks5 proxy selected unsupported authentication method")
+	}
+
+	host, portRaw, err := net.SplitHostPort(targetAddress)
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("target address has invalid port")
+	}
+	request, err := socks5ConnectRequest(host, port)
+	if err != nil {
+		return err
+	}
+	if _, err := conn.Write(request); err != nil {
+		return err
+	}
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return err
+	}
+	if header[0] != 0x05 {
+		return fmt.Errorf("socks5 proxy returned invalid response version")
+	}
+	if header[1] != 0x00 {
+		return fmt.Errorf("socks5 proxy connect failed: %s", socks5ReplyMessage(header[1]))
+	}
+	switch header[3] {
+	case 0x01:
+		_, err = io.CopyN(io.Discard, conn, 4)
+	case 0x03:
+		length := []byte{0}
+		if _, err = io.ReadFull(conn, length); err != nil {
+			return err
+		}
+		_, err = io.CopyN(io.Discard, conn, int64(length[0]))
+	case 0x04:
+		_, err = io.CopyN(io.Discard, conn, 16)
+	default:
+		return fmt.Errorf("socks5 proxy returned invalid address type")
+	}
+	if err != nil {
+		return err
+	}
+	_, err = io.CopyN(io.Discard, conn, 2)
+	return err
+}
+
+func socks5UsernamePasswordAuth(conn net.Conn, proxyURL *url.URL) error {
+	if proxyURL.User == nil {
+		return fmt.Errorf("socks5 proxy requested username/password authentication but --proxy has no credentials")
+	}
+	username := proxyURL.User.Username()
+	password, _ := proxyURL.User.Password()
+	if len(username) > 255 || len(password) > 255 {
+		return fmt.Errorf("socks5 username and password must be at most 255 bytes")
+	}
+	request := []byte{0x01, byte(len(username))}
+	request = append(request, []byte(username)...)
+	request = append(request, byte(len(password)))
+	request = append(request, []byte(password)...)
+	if _, err := conn.Write(request); err != nil {
+		return err
+	}
+	response := make([]byte, 2)
+	if _, err := io.ReadFull(conn, response); err != nil {
+		return err
+	}
+	if response[0] != 0x01 || response[1] != 0x00 {
+		return fmt.Errorf("socks5 username/password authentication failed")
+	}
+	return nil
+}
+
+func socks5ConnectRequest(host string, port int) ([]byte, error) {
+	request := []byte{0x05, 0x01, 0x00}
+	ip := net.ParseIP(host)
+	ip4 := ip.To4()
+	ip16 := ip.To16()
+	switch {
+	case ip4 != nil:
+		request = append(request, 0x01)
+		request = append(request, ip4...)
+	case ip16 != nil:
+		request = append(request, 0x04)
+		request = append(request, ip16...)
+	default:
+		host = strings.TrimSuffix(host, ".")
+		if len(host) == 0 || len(host) > 255 {
+			return nil, fmt.Errorf("target hostname must be 1-255 bytes for socks5")
+		}
+		request = append(request, 0x03, byte(len(host)))
+		request = append(request, []byte(host)...)
+	}
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(port))
+	return append(request, portBytes...), nil
+}
+
+func socks5ReplyMessage(code byte) string {
+	switch code {
+	case 0x01:
+		return "general failure"
+	case 0x02:
+		return "connection not allowed"
+	case 0x03:
+		return "network unreachable"
+	case 0x04:
+		return "host unreachable"
+	case 0x05:
+		return "connection refused"
+	case 0x06:
+		return "ttl expired"
+	case 0x07:
+		return "command not supported"
+	case 0x08:
+		return "address type not supported"
+	default:
+		return "unknown error"
+	}
+}
+
+func socks4DialContext(proxyURL *url.URL) func(context.Context, string, string) (net.Conn, error) {
+	var dialer net.Dialer
+	return func(ctx context.Context, network string, address string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, proxyAddress(proxyURL))
+		if err != nil {
+			return nil, err
+		}
+		if err := applyContextDeadline(ctx, conn); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		if err := socks4Handshake(ctx, conn, address, proxyURL); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		_ = conn.SetDeadline(time.Time{})
+		return conn, nil
+	}
+}
+
+func socks4Handshake(ctx context.Context, conn net.Conn, targetAddress string, proxyURL *url.URL) error {
+	host, portRaw, err := net.SplitHostPort(targetAddress)
+	if err != nil {
+		return err
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("target address has invalid port")
+	}
+	ip := net.ParseIP(host).To4()
+	useSocks4A := strings.EqualFold(proxyURL.Scheme, "socks4a")
+	if ip == nil && !useSocks4A {
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
+		if err != nil {
+			return err
+		}
+		for _, resolved := range ips {
+			if ip = resolved.To4(); ip != nil {
+				break
+			}
+		}
+		if ip == nil {
+			return fmt.Errorf("socks4 requires an IPv4 target")
+		}
+	}
+	if ip == nil {
+		ip = net.IPv4(0, 0, 0, 1).To4()
+	}
+
+	userID := ""
+	if proxyURL.User != nil {
+		userID = proxyURL.User.Username()
+		if password, ok := proxyURL.User.Password(); ok && password != "" {
+			userID += ":" + password
+		}
+	}
+	request := []byte{0x04, 0x01}
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(port))
+	request = append(request, portBytes...)
+	request = append(request, ip...)
+	request = append(request, []byte(userID)...)
+	request = append(request, 0x00)
+	if useSocks4A && net.ParseIP(host) == nil {
+		request = append(request, []byte(host)...)
+		request = append(request, 0x00)
+	}
+	if _, err := conn.Write(request); err != nil {
+		return err
+	}
+	response := make([]byte, 8)
+	if _, err := io.ReadFull(conn, response); err != nil {
+		return err
+	}
+	if response[0] != 0x00 {
+		return fmt.Errorf("socks4 proxy returned invalid response")
+	}
+	if response[1] != 0x5a {
+		return fmt.Errorf("socks4 proxy connect failed: %s", socks4ReplyMessage(response[1]))
+	}
+	return nil
+}
+
+func socks4ReplyMessage(code byte) string {
+	switch code {
+	case 0x5b:
+		return "request rejected or failed"
+	case 0x5c:
+		return "client is not running identd"
+	case 0x5d:
+		return "client identd user ID mismatch"
+	default:
+		return "unknown error"
+	}
+}
+
+func applyContextDeadline(ctx context.Context, conn net.Conn) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		return conn.SetDeadline(deadline)
+	}
+	return nil
 }
 
 func parseFirecrawlResponse(endpointName string, resp *http.Response) (map[string]any, error) {
@@ -1804,16 +2217,16 @@ func defaultScrapeExcludeTags() []string {
 
 func printRootUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl aggregated --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
-  firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
-  firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
-  firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
-  firecrawl scholar    --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>]
-  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]
-  firecrawl parse      (--url <url> | --file <file>) --output <name> [--path <dir>] [--skip-tls] [--timeout <seconds>]
-  firecrawl audio-scrape --url <url> [--timeout <seconds>]
-  firecrawl video-scrape --url <url> [--timeout <seconds>]
-  firecrawl credit-usage [--json] [--pretty]
+  firecrawl aggregated --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>] [--proxy <url>]
+  firecrawl web        --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>] [--proxy <url>]
+  firecrawl news       --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>] [--proxy <url>]
+  firecrawl image      --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>] [--proxy <url>]
+  firecrawl scholar    --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>] [--proxy <url>]
+  firecrawl scrape     --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>] [--proxy <url>]
+  firecrawl parse      (--url <url> | --file <file>) --output <name> [--path <dir>] [--skip-tls] [--timeout <seconds>] [--proxy <url>]
+  firecrawl audio-scrape --url <url> [--timeout <seconds>] [--proxy <url>]
+  firecrawl video-scrape --url <url> [--timeout <seconds>] [--proxy <url>]
+  firecrawl credit-usage [--json] [--pretty] [--proxy <url>]
 
 The API key is read from FIRECRAWL_KEY.
 The optional API base URL is read from FIRECRAWL_BASE_URL and defaults to https://api.firecrawl.dev/v2.
@@ -1823,7 +2236,7 @@ The optional API base URL is read from FIRECRAWL_BASE_URL and defaults to https:
 
 func printScholarUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scholar --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>]
+  firecrawl scholar --query <keywords> [--search-num <1-500>] [--categories <categories>] [--time-from <date>] [--time-to <date>] [--timeout <seconds>] [--proxy <url>]
 
 Parameters:
   --query       Research paper search keywords. Required. Minimum length is 1.
@@ -1832,6 +2245,7 @@ Parameters:
   --time-from   Inclusive created/updated date lower bound. Optional. Format: yyyy-MM-dd, for example 2000-05-28.
   --time-to     Inclusive created/updated date upper bound. Optional. Format: yyyy-MM-dd, for example 2026-06-28.
   --timeout     Request timeout in seconds. Optional. Must be > 0. Default is 120.
+  --proxy       Proxy URL for requests to Firecrawl API. Optional. Supports http, https, socks4, socks4a, socks5, and socks5h.
 
 Output:
   Compact single-line JSON with success and data.scholar.
@@ -1841,7 +2255,7 @@ Output:
 
 func printParseUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl parse (--url <url> | --file <file>) --output <name> [--path <dir>] [--skip-tls] [--timeout <seconds>]
+  firecrawl parse (--url <url> | --file <file>) --output <name> [--path <dir>] [--skip-tls] [--timeout <seconds>] [--proxy <url>]
 
 Parameters:
   --url       Target document URL. Required unless --file is provided.
@@ -1850,6 +2264,7 @@ Parameters:
   --path      Directory where the markdown export is saved. Optional. Supports absolute and relative paths. Default is the current directory.
   --skip-tls  Skip TLS certificate verification for URL parsing. Optional. Default is false.
   --timeout   Request timeout in seconds. Optional. Must be > 0. Default is 120.
+  --proxy     Proxy URL for requests to Firecrawl API. Optional. Supports http, https, socks4, socks4a, socks5, and socks5h.
 
 Output:
   true on success. The output directory is created before parsing, and the markdown export is written only after a successful parse.
@@ -1860,11 +2275,12 @@ Output:
 
 func printAVScrapeUsage(w io.Writer, commandName string, format string) {
 	fmt.Fprintf(w, `Usage:
-  firecrawl %s --url <url> [--timeout <seconds>]
+  firecrawl %s --url <url> [--timeout <seconds>] [--proxy <url>]
 
 Parameters:
   --url      Target audio/video webpage URL. Required.
   --timeout  Request timeout in seconds. Optional. Must be > 0. Default is 120.
+  --proxy    Proxy URL for requests to Firecrawl API. Optional. Supports http, https, socks4, socks4a, socks5, and socks5h.
 
 Output:
   Compact single-line JSON with creditsUsed, title, description, %s, and success.
@@ -1874,7 +2290,7 @@ Output:
 
 func printSearchUsage(w io.Writer, name string) {
 	fmt.Fprintf(w, `Usage:
-  firecrawl %s --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>]
+  firecrawl %s --query <keywords> [--country <country>] [--search-num <1-100>] [--search-time <hour|day|week|month|year>] [--timeout <seconds>] [--proxy <url>]
 
 Parameters:
   --query        Search keywords. Required.
@@ -1882,6 +2298,7 @@ Parameters:
   --search-num   Number of results to return. Optional. Legal range: 1-100. Default is 20.
   --search-time  Time filter. Optional. One of: "hour", "day", "week", "month", "year".
   --timeout      Request timeout in seconds. Optional. Must be > 0. Default is 120.
+  --proxy        Proxy URL for requests to Firecrawl API. Optional. Supports http, https, socks4, socks4a, socks5, and socks5h.
 
 Output:
   Compact single-line JSON with success, data.web, data.news, data.images, and creditsUsed.
@@ -1891,7 +2308,7 @@ Output:
 
 func printScrapeUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>]
+  firecrawl scrape --output <name> [--path <dir>] --url <url> [--include-tags <selectors>] [--exclude-tags <selectors>] [--empty-tags] [--scroll] [--skip-tls] [--headers <json-object>] [--headers-file <file>] [--timeout <seconds>] [--proxy <url>]
 
 Parameters:
   --output          Export name. Required. The result is saved as <output>.md.
@@ -1905,6 +2322,7 @@ Parameters:
   --headers         Root-level request headers as a JSON object, for example {"Authorization":"Bearer token","X-Trace-Id":"abc123"}.
   --headers-file    Path to a headers file. Supports JSON headers/cookies, HTTP header string, Netscape cookies, or Cookie header value.
   --timeout         Request timeout in seconds. Optional. Must be > 0. Default is 120.
+  --proxy           Proxy URL for requests to Firecrawl API. Optional. Supports http, https, socks4, socks4a, socks5, and socks5h.
 
 Input examples:
   --include-tags "article"
@@ -1930,11 +2348,12 @@ Output:
 
 func printCreditUsageUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
-  firecrawl credit-usage [--json] [--pretty]
+  firecrawl credit-usage [--json] [--pretty] [--proxy <url>]
 
 Parameters:
   --json    Output JSON. Optional. JSON is the default output format.
   --pretty  Pretty-print JSON output. Optional.
+  --proxy   Proxy URL for requests to Firecrawl API. Optional. Supports http, https, socks4, socks4a, socks5, and socks5h.
 
 Output:
   JSON response from /v2/team/credit-usage.

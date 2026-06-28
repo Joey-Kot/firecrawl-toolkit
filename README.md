@@ -264,6 +264,19 @@ firecrawl video-scrape
 firecrawl credit-usage
 ```
 
+## Common CLI options
+
+### `--proxy`
+
+Optional. Proxy URL for CLI requests to the Firecrawl API. Supported schemes are `http`, `https`, `socks4`, `socks4a`, `socks5`, and `socks5h`.
+
+Use URL userinfo for proxy authentication, or omit it for no authentication:
+
+```bash
+firecrawl web --query "AI policy" --proxy "http://user:pass@127.0.0.1:8080"
+firecrawl scrape --url "https://example.com" --output example --proxy "socks5://127.0.0.1:1080"
+```
+
 ## Scrape command
 
 ### Basic usage
@@ -489,6 +502,10 @@ firecrawl scrape \
   --timeout 180
 ```
 
+### `--proxy`
+
+Optional. Proxy URL for requests from the CLI to the Firecrawl API. Supports `http`, `https`, `socks4`, `socks4a`, `socks5`, and `socks5h`, with URL userinfo authentication or no authentication.
+
 ## Scholar command
 
 `scholar` searches research papers and prints compact single-line JSON to stdout.
@@ -529,6 +546,10 @@ Optional. Inclusive upper bound for created/updated date. Format: `yyyy-MM-dd`, 
 #### `--timeout`
 
 Optional. Request timeout in seconds. Default is `120`.
+
+#### `--proxy`
+
+Optional. Proxy URL for requests from the CLI to the Firecrawl API. Supports `http`, `https`, `socks4`, `socks4a`, `socks5`, and `socks5h`.
 
 Output fields:
 
@@ -602,6 +623,10 @@ Optional. URL mode only. Skip TLS certificate verification for the upstream docu
 
 Optional. Request timeout in seconds. Default is `120`.
 
+#### `--proxy`
+
+Optional. Proxy URL for requests from the CLI to the Firecrawl API. Supports `http`, `https`, `socks4`, `socks4a`, `socks5`, and `socks5h`.
+
 The generated Markdown begins with:
 
 ```markdown
@@ -645,7 +670,7 @@ Output fields:
 {"creditsUsed":5,"title":"Video title","description":"Video description","video":"https://storage.example/video.mp4","success":true}
 ```
 
-Both commands require `--url`. `--timeout` is optional, accepts seconds, defaults to `120`, and is forwarded to Firecrawl as milliseconds.
+Both commands require `--url`. `--timeout` is optional, accepts seconds, defaults to `120`, and is forwarded to Firecrawl as milliseconds. `--proxy` is also supported for CLI requests to the Firecrawl API.
 
 ## Recommended agent usage
 
@@ -759,6 +784,10 @@ firecrawl news --query "AI regulation" --search-time week
 
 Optional. Request timeout in seconds. Default is `120`.
 
+#### `--proxy`
+
+Optional. Proxy URL for requests from the CLI to the Firecrawl API. Supports `http`, `https`, `socks4`, `socks4a`, `socks5`, and `socks5h`.
+
 ## Search output
 
 Search commands output compact JSON:
@@ -810,6 +839,8 @@ Pretty-print:
 ```bash
 firecrawl credit-usage --pretty
 ```
+
+`credit-usage` also supports `--proxy` for CLI requests to the Firecrawl API.
 
 Default output is JSON:
 

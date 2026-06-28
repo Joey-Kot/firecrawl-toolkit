@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -437,6 +440,183 @@ func TestEndpointURLUsesConfiguredBaseURL(t *testing.T) {
 		if got := endpointURL(endpointName); got != want {
 			t.Fatalf("endpointURL(%q) = %q, want %q", endpointName, got, want)
 		}
+	}
+}
+
+func TestProxyFlagIsAcceptedByAllSubcommands(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	dir := t.TempDir()
+	cases := [][]string{
+		{"aggregated", "--query", "ai"},
+		{"web", "--query", "ai"},
+		{"news", "--query", "ai"},
+		{"image", "--query", "ai"},
+		{"scholar", "--query", "ai"},
+		{"scrape", "--output", "page", "--path", dir, "--url", "https://example.com"},
+		{"parse", "--output", "page", "--path", dir, "--url", "https://example.com/file.pdf"},
+		{"audio-scrape", "--url", "https://example.com/video"},
+		{"video-scrape", "--url", "https://example.com/video"},
+		{"credit-usage"},
+	}
+	for _, baseArgs := range cases {
+		t.Run(baseArgs[0], func(t *testing.T) {
+			args := append(append([]string{}, baseArgs...), "--proxy", "ftp://proxy.example:21")
+			var stdout, stderr bytes.Buffer
+			err := run(args, &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), "--proxy scheme") {
+				t.Fatalf("expected proxy scheme validation error, got err=%v stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestHTTPProxyFlagRoutesRequestsThroughProxyWithAuthentication(t *testing.T) {
+	t.Setenv(apiKeyEnv, "test-key")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	received := make(chan string, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			received <- err.Error()
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var request bytes.Buffer
+		buf := make([]byte, 1024)
+		for !strings.Contains(request.String(), "\r\n\r\n") {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				request.Write(buf[:n])
+			}
+			if err != nil {
+				received <- request.String()
+				return
+			}
+		}
+		received <- request.String()
+		body := `{"success":true,"data":{"web":[],"news":[],"images":[]}}`
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n" + body))
+	}()
+
+	oldEndpoint := endpoints["search"]
+	oldClient := httpClient
+	endpoints["search"] = "http://upstream.example/search"
+	httpClient = &http.Client{Timeout: 30 * time.Second}
+	t.Cleanup(func() {
+		endpoints["search"] = oldEndpoint
+		httpClient = oldClient
+	})
+
+	var stdout, stderr bytes.Buffer
+	err = run([]string{"web", "--query", "ai", "--proxy", "http://user:pass@" + listener.Addr().String()}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run returned error: %v; stdout=%s stderr=%s", err, stdout.String(), stderr.String())
+	}
+	request := <-received
+	if !strings.HasPrefix(request, "POST http://upstream.example/search HTTP/1.1\r\n") {
+		t.Fatalf("proxy received unexpected request:\n%s", request)
+	}
+	if !strings.Contains(request, "Proxy-Authorization: Basic dXNlcjpwYXNz\r\n") {
+		t.Fatalf("proxy request missing basic auth header:\n%s", request)
+	}
+}
+
+func TestSocks5HandshakeSupportsUsernamePasswordAuthentication(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	done := make(chan error, 1)
+	go func() {
+		greeting := make([]byte, 4)
+		if _, err := io.ReadFull(server, greeting); err != nil {
+			done <- err
+			return
+		}
+		if !bytes.Equal(greeting, []byte{0x05, 0x02, 0x00, 0x02}) {
+			done <- errors.New("unexpected socks5 greeting")
+			return
+		}
+		if _, err := server.Write([]byte{0x05, 0x02}); err != nil {
+			done <- err
+			return
+		}
+		auth := make([]byte, 11)
+		if _, err := io.ReadFull(server, auth); err != nil {
+			done <- err
+			return
+		}
+		if !bytes.Equal(auth, []byte{0x01, 0x04, 'u', 's', 'e', 'r', 0x04, 'p', 'a', 's', 's'}) {
+			done <- errors.New("unexpected socks5 auth payload")
+			return
+		}
+		if _, err := server.Write([]byte{0x01, 0x00}); err != nil {
+			done <- err
+			return
+		}
+		request := make([]byte, 18)
+		if _, err := io.ReadFull(server, request); err != nil {
+			done <- err
+			return
+		}
+		if !bytes.Equal(request, []byte{0x05, 0x01, 0x00, 0x03, 0x0b, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', 0x01, 0xbb}) {
+			done <- errors.New("unexpected socks5 connect request")
+			return
+		}
+		_, err := server.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+		done <- err
+	}()
+
+	proxyURL, err := url.Parse("socks5://user:pass@127.0.0.1:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := socks5Handshake(client, "example.com:443", proxyURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSocks4AHandshakeSupportsUserInfo(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	done := make(chan error, 1)
+	go func() {
+		request := make([]byte, 30)
+		if _, err := io.ReadFull(server, request); err != nil {
+			done <- err
+			return
+		}
+		want := []byte{
+			0x04, 0x01, 0x00, 0x50, 0x00, 0x00, 0x00, 0x01,
+			'u', 's', 'e', 'r', ':', 'p', 'a', 's', 's', 0x00,
+			'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', 0x00,
+		}
+		if !bytes.Equal(request, want) {
+			done <- errors.New("unexpected socks4a request")
+			return
+		}
+		_, err := server.Write([]byte{0x00, 0x5a, 0x00, 0x50, 0x00, 0x00, 0x00, 0x01})
+		done <- err
+	}()
+
+	proxyURL, err := url.Parse("socks4a://user:pass@127.0.0.1:1080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := socks4Handshake(context.Background(), client, "example.com:80", proxyURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
